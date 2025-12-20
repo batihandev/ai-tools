@@ -7,6 +7,7 @@ from helper.spinner import with_spinner
 from helper.llm import ollama_chat, strip_fences_and_quotes
 from helper.clipboard import copy_to_clipboard
 from helper.context import warn_if_approaching_context
+
 """
 ai-commit – suggest git commit messages using local LLM (Llama 3.1:8b).
 
@@ -18,8 +19,6 @@ USAGE
   # 2) Use unstaged working tree changes instead (git diff)
   ai-commit --all
 """
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +218,7 @@ def clean_commit_message_llm(text: str) -> str:
 
         Output:
         - Only the cleaned commit message text.
+        - No explanations or extra text about the cleaning step.
         """
     ).strip()
 
@@ -310,41 +310,65 @@ def call_model(system_prompt: str, user_prompt: str, changed_files: list[str]) -
         sys.exit(1)
 
 
-def paraphrase_message(original: str, changed_files: list[str]) -> str:
-    """Ask the model to rephrase the commit message (meaning-preserving)."""
+# ---------------------------------------------------------------------------
+# Paraphrasing (summary-only, from current base generation)
+# ---------------------------------------------------------------------------
+
+
+def paraphrase_message(base_message: str) -> str:
+    """
+    Paraphrase ONLY the first line (summary) of the given base message.
+
+    - The body/bullets are kept EXACTLY as in base_message.
+    - Caller controls what "base_message" is (e.g., initial or retried generation),
+      so we never paraphrase a paraphrase unless the caller chooses to.
+    """
+    lines = base_message.splitlines()
+    if not lines:
+        return base_message
+
+    summary = lines[0].strip()
+    body = "\n".join(lines[1:])
+
+    if not summary:
+        return base_message
+
     system_prompt = dedent(
         """
-        You are a git commit message rewriter.
+        You are a git commit summary rewriter.
 
-        Rewrite the provided commit message:
+        Rewrite the provided ONE-LINE commit summary:
         - Keep the same meaning and intent.
         - Use imperative, present tense.
         - Keep it concise but clear.
 
-        Output:
-        - Only the rewritten commit message text.
-        - No commentary, backticks, or code fences.
+        Constraints:
+        - Output MUST be a single line (no newlines).
+        - Do NOT add quotes or backticks.
+        - Do NOT mention that you are rewriting or paraphrasing.
         """
     ).strip()
 
-    user_prompt = f"Rewrite the following git commit message:\n\n{original}\n"
+    user_prompt = f"Rewrite this commit summary line:\n\n{summary}\n"
 
-    def _call():
+    try:
         raw = ollama_chat(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            num_ctx=4096,
-            timeout=120,
+            num_ctx=1024,
+            timeout=60,
         )
-        cleaned = clean_commit_message_llm(raw)
-        final = ensure_bullets_for_files(cleaned, changed_files)
-        return final
-
-    try:
-        return with_spinner("ai-commit paraphrasing", _call)
+        cleaned = strip_fences_and_quotes(raw).strip()
+        new_summary = cleaned.splitlines()[0].strip() if cleaned else summary
+        if not new_summary:
+            new_summary = summary
     except Exception as e:
-        print(f"[ai-commit] Paraphrase failed: {e}", file=sys.stderr)
-        return original
+        print(f"[ai-commit] Paraphrase failed, keeping original summary: {e}", file=sys.stderr)
+        return base_message
+
+    if body:
+        return new_summary + "\n" + body
+    return new_summary
 
 
 # ---------------------------------------------------------------------------
@@ -432,20 +456,34 @@ def print_git_command_hint(message: str) -> tuple[str, str]:
     return summary, full_cmd
 
 
-def interactive_menu(message: str, changed_files: list[str]) -> None:
-    """Show message and allow: accept+clipboard, paraphrase, cancel."""
-    current = message
+def interactive_menu(
+    initial_message: str,
+    system_prompt: str,
+    user_prompt: str,
+    changed_files: list[str],
+) -> None:
+    """
+    Show message and allow: accept+clipboard, paraphrase, retry, cancel.
+
+    - We keep a "base_message" which is the latest raw generation from the model.
+    - Paraphrase always works from the current base_message (summary-only).
+    - Retry regenerates a new base_message via call_model, without redoing git diff.
+    """
+    base_message = initial_message
+    current = initial_message
+
     while True:
         _, cmd = print_git_command_hint(current)
 
         print(
             "[ai-commit] Choose an action:\n"
             "  1) Accept this message (copy command to clipboard)\n"
-            "  2) Paraphrase / rewrite message\n"
-            "  3) Cancel\n"
+            "  2) Paraphrase / rewrite SUMMARY line\n"
+            "  3) Retry generation (new commit message)\n"
+            "  4) Cancel\n"
         )
 
-        choice = input("Selection [1/2/3] (default: 1): ").strip()
+        choice = input("Selection [1/2/3/4] (default: 1): ").strip()
 
         if choice in ("", "1"):
             if cmd:
@@ -463,12 +501,18 @@ def interactive_menu(message: str, changed_files: list[str]) -> None:
             return
 
         elif choice == "2":
-            print("[ai-commit] rewriting message...\n")
-            new_message = paraphrase_message(current, changed_files)
+            print("[ai-commit] rewriting SUMMARY line...\n")
+            new_message = paraphrase_message(base_message)
             if not new_message or new_message == current:
-                print("[ai-commit] rewrite resulted in no change.", file=sys.stderr)
+                print("[ai-commit] rewrite resulted in no visible change.", file=sys.stderr)
             else:
                 current = new_message
+
+        elif choice == "3":
+            print("[ai-commit] regenerating commit message...\n", file=sys.stderr)
+            # New base from the same diff & prompts, no extra git work.
+            base_message = call_model(system_prompt, user_prompt, changed_files)
+            current = base_message
 
         else:
             print("[ai-commit] Cancelled.", file=sys.stderr)
@@ -481,7 +525,7 @@ def main() -> None:
     changed_files = extract_changed_files(diff)
     system_prompt, user_prompt = build_prompt(diff, changed_files)
     message = call_model(system_prompt, user_prompt, changed_files)
-    interactive_menu(message, changed_files)
+    interactive_menu(message, system_prompt, user_prompt, changed_files)
 
 
 if __name__ == "__main__":
