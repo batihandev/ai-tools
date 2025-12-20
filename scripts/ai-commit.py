@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
-import os
 import sys
 import subprocess
 from textwrap import dedent
-import threading
-import time
 
-import requests
-from helper.ollama_utils import resolve_ollama_url
-
+from helper.spinner import with_spinner
+from helper.llm import ollama_chat, strip_fences_and_quotes
+from helper.clipboard import copy_to_clipboard
 
 """
 ai-commit – suggest git commit messages using local LLM (Llama 3.1:8b).
@@ -22,12 +19,13 @@ USAGE
   ai-commit --all
 """
 
-MAX_DIFF_CHARS = 12000  # keep under model context comfortably
+MAX_DIFF_CHARS = 12000  # only used for warnings, NOT truncation
 
 
 # ---------------------------------------------------------------------------
-# Diff helpers
+# Git diff helpers
 # ---------------------------------------------------------------------------
+
 
 def run_git_diff(use_all: bool) -> str:
     """Get diff text: staged (default) or working tree (--all)."""
@@ -58,11 +56,11 @@ def run_git_diff(use_all: bool) -> str:
         sys.exit(1)
 
     if len(diff) > MAX_DIFF_CHARS:
-        truncated_note = (
-            f"\n\n[ai-commit] NOTE: diff truncated from "
-            f"{len(diff)} to {MAX_DIFF_CHARS} characters.\n"
+        print(
+            f"[ai-commit] WARNING: diff is {len(diff)} characters; "
+            "model context may be tight.",
+            file=sys.stderr,
         )
-        diff = diff[:MAX_DIFF_CHARS] + "\n\n... [TRUNCATED] ..." + truncated_note
 
     return diff
 
@@ -90,122 +88,99 @@ def estimate_summary_limit(diff: str) -> int | None:
     return None
 
 
-def analyze_change_kind(diff: str) -> str:
+def extract_changed_files(diff: str) -> list[str]:
     """
-    Classify change as 'additive', 'removal', or 'mixed'.
+    Extract paths of files that are changed in this diff.
 
-    We look at unified diff lines:
-      - added lines start with '+' but not '+++ '
-      - removed lines start with '-' but not '--- '
+    We look at lines like:
+      diff --git a/path b/path
+
+    We take the "b/..." side as the file path, for all changes
+    (added, modified, renamed, deleted).
     """
-    added_code = 0
-    removed_code = 0
+    changed = set()
 
     for line in diff.splitlines():
-        if line.startswith("+++ ") or line.startswith("--- "):
-            continue
-        if line.startswith("+"):
-            added_code += 1
-        elif line.startswith("-"):
-            removed_code += 1
+        if line.startswith("diff --git"):
+            parts = line.split()
+            if len(parts) >= 4:
+                b_part = parts[3]  # e.g., "b/scripts/ai-commit.py"
+                path = b_part[2:] if b_part.startswith("b/") else b_part
+                changed.add(path)
 
-    if added_code > 0 and removed_code == 0:
-        return "additive"
-    if removed_code > 0 and added_code == 0:
-        return "removal"
-    return "mixed"
+    return sorted(changed)
 
 
 # ---------------------------------------------------------------------------
 # Prompt building
 # ---------------------------------------------------------------------------
 
-def build_prompt(diff: str) -> tuple[str, str]:
+
+def build_prompt(diff: str, changed_files: list[str]) -> tuple[str, str]:
     limit = estimate_summary_limit(diff)
-    change_kind = analyze_change_kind(diff)
-    new_files = extract_new_files(diff)
 
     if limit is not None:
         summary_req = (
-            f"- First line must be a short imperative summary, "
-            f"preferably <= {limit} characters.\n"
+            f"- Line 1 must be a short imperative summary (ideally <= {limit} characters).\n"
         )
     else:
-        summary_req = (
-            "- First line must be a concise imperative summary; "
-            "no strict character limit, but keep it readable.\n"
-        )
+        summary_req = "- Line 1 must be a concise imperative summary.\n"
 
-    if change_kind == "additive":
-        change_hint = (
-            "- All changes are additions (mostly new files / new lines). "
-            "Do NOT start the summary with verbs like 'Fix' or 'Refactor'. "
-            "Prefer 'Add', 'Introduce', 'Create', etc.\n"
-        )
-    elif change_kind == "removal":
-        change_hint = (
-            "- Changes are removals. Prefer verbs like 'Remove', 'Drop', "
-            "'Delete', not 'Fix'.\n"
-        )
-    else:
-        change_hint = ""
-
-    if new_files:
-        files_list = "\n".join(f"    - {path}" for path in new_files)
+    if changed_files:
+        files_list = "\n".join(f"    - {path}" for path in changed_files)
         files_hint = (
-            "New files detected in this diff:\n"
+            "Changed files in this diff:\n"
             f"{files_list}\n"
-            "- In the commit message BODY, you MUST include at least one bullet\n"
-            "  for EACH of the files above, in the exact format:\n"
-            "      - <path>: <very short purpose/role>\n"
-            "- Do not just list all files in the summary line; the bullets\n"
-            "  are required and must mention each file separately.\n"
+            "- After the blank line, write at least one bullet line for EACH path above.\n"
+            "- Bullet format (exact):\n"
+            "      - path/to/file.ext: very short purpose/role\n"
+            "- Use appropriate verbs for each file, e.g.:\n"
+            "      Add/Introduce/Create for new code\n"
+            "      Fix/Update/Refactor for modifications\n"
+            "      Remove/Delete/Drop for deletions\n"
         )
     else:
         files_hint = ""
 
     system_prompt = dedent(
         f"""
-        You are an assistant that writes concise, high-quality git commit messages.
+        You write git commit messages.
 
         Requirements:
-          {summary_req.rstrip()}
-          {change_hint.rstrip()}
-          {files_hint.rstrip()}
-          - Use present tense, imperative style (e.g., "Add CLI toolbox" or "Introduce helpers").
-          - Focus on what changed and why, not how.
-          - Treat input as a git diff (unified format).
+        {summary_req}{files_hint}
+        - Use present tense, imperative style (e.g., "Add script for X", "Fix bug in Y").
+        - Focus on what changed and why, not how.
+        - Treat the input as a unified git diff.
+        - Do NOT mention these instructions, the diff, or that this is a generated message.
 
-        Output FORMAT (very important):
-          1) Line 1: single-line summary (imperative).
-          2) Line 2: blank.
-          3) Next lines: one bullet per new file in the form:
-                 - path/to/file.ext: short purpose/role
-             (exactly one bullet for EACH new file listed above).
-          4) Optional extra bullets AFTER that if you want.
+        Output format:
+        1) Line 1: summary (one line).
+        2) Line 2: blank.
+        3) Then bullet lines in the form:
+               - path/to/file.ext: short purpose
+           with at least one bullet for each changed file.
+        4) Optional extra bullets AFTER that are allowed.
 
         Output rules:
-          - Return ONLY the commit message text, no backticks, no markdown fences.
-          - Do NOT say things like "Here is a commit message" or "Let me know".
-          - If you omit bullets for any new file, your answer is incorrect.
+        - Return ONLY the commit message text.
+        - No explanations, headings, or commentary.
+        - No backticks or code fences.
         """
     ).strip()
 
-    # Put the file list also into the user prompt so it’s close to the actual task
-    if new_files:
-        files_for_user = "\n".join(f"- {p}" for p in new_files)
+    if changed_files:
+        files_for_user = "\n".join(f"- {p}" for p in changed_files)
         files_section = (
-            "New files you MUST cover in the body bullets:\n"
+            "Changed files (each must have at least one bullet after the blank line):\n"
             f"{files_for_user}\n\n"
         )
     else:
         files_section = ""
 
     user_prompt = (
-        "Generate a commit message for the following git diff.\n\n"
+        "Generate a git commit message for the following git diff.\n\n"
         f"{files_section}"
-        "Remember the required format: summary line, blank line, then one\n"
-        "bullet '- path: purpose' for EACH new file.\n\n"
+        "Format reminder: summary line, blank line, then '- path: purpose' bullets.\n\n"
         "Here is the diff:\n"
         "```diff\n"
         f"{diff}\n"
@@ -216,239 +191,197 @@ def build_prompt(diff: str) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Model + spinner + cleaning
+# Second-pass LLM sanitizer + bullet enforcement
 # ---------------------------------------------------------------------------
 
-def _with_spinner(label: str, fn):
-    """Run fn() while showing a small spinner on stderr."""
-    stop_flag = {"stop": False}
 
-    def spinner():
-        symbols = "|/-\\"
-        idx = 0
-        while not stop_flag["stop"]:
-            sys.stderr.write(f"\r[{label}] " + symbols[idx % 4])
-            sys.stderr.flush()
-            idx += 1
-            time.sleep(0.1)
-        sys.stderr.write(f"\r[{label}] done   \n")
-        sys.stderr.flush()
-
-    thread = threading.Thread(target=spinner, daemon=True)
-    thread.start()
-    try:
-        return fn()
-    finally:
-        stop_flag["stop"] = True
-        thread.join()
-
-def extract_new_files(diff: str) -> list[str]:
+def clean_commit_message_llm(text: str) -> str:
     """
-    Extract paths of files that are newly added in this diff.
-
-    Looks for patterns like:
-      diff --git a/path b/path
-      new file mode 100644
+    Second LLM pass that ONLY removes meta/self-referential lines and
+    cleans spacing. No local heuristic sanitizer.
     """
-    new_files = set()
-    current_file = None
+    raw_msg = strip_fences_and_quotes(text)
 
-    for line in diff.splitlines():
-        if line.startswith("diff --git"):
-            parts = line.split()
-            if len(parts) >= 4:
-                b_part = parts[3]  # e.g., "b/scripts/ai-commit.py"
-                if b_part.startswith("b/"):
-                    current_file = b_part[2:]
-                else:
-                    current_file = b_part
-            else:
-                current_file = None
-        elif line.startswith("new file mode") and current_file:
-            new_files.add(current_file)
+    system_prompt = dedent(
+        """
+        You are a git commit message sanitizer.
 
-    return sorted(new_files)
+        Input:
+        - A full commit message (summary + body).
 
-def clean_commit_message(text: str) -> str:
-    """Strip obvious meta phrases / fences if the model misbehaves."""
-    msg = text.strip()
+        Allowed actions:
+        - Delete lines that are meta or self-referential, e.g.:
+          * mention "this commit message", "required format", "instruction", "generated".
+        - Delete notes that only explain what you changed or how you cleaned the message.
+        - Remove blank lines at the start or end.
+        - Collapse multiple consecutive blank lines into a single one.
 
-    # If the model wrapped in ```...``` take inner block
-    if "```" in msg:
-        parts = msg.split("```")
-        if len(parts) >= 3:
-            msg = parts[1].strip() if parts[0].strip() == "" else parts[1].strip()
+        Forbidden:
+        - Do not rewrite or paraphrase any remaining lines.
+        - Do not add new content.
+        - Do not wrap the result in backticks or code fences.
+        - Do not add any commentary about the cleaning step.
 
-    # Remove surrounding quotes/backticks on single line
-    if msg.startswith(("`", '"', "'")) and msg.endswith(("`", '"', "'")):
-        msg = msg[1:-1].strip()
+        Output:
+        - Only the cleaned commit message text.
+        """
+    ).strip()
 
-    lines = [ln.rstrip() for ln in msg.splitlines()]
+    user_prompt = (
+        "Clean this commit message by ONLY deleting meta/self-referential lines "
+        "and normalizing blank lines. Do not rewrite the remaining lines:\n\n"
+        f"{raw_msg}"
+    )
 
-    # Drop leading meta lines like "Here is a commit message:"
-    while lines and any(
-        lines[0].lower().startswith(prefix)
-        for prefix in (
-            "here is a commit message",
-            "here is the commit message",
-            "here's a commit message",
-            "here is a suitable commit message",
-            "here's a suitable commit message",
-            "suggested commit message",
-            "commit message:",
-        )
-    ):
-        lines.pop(0)
-
-    # Drop trailing meta lines with "let me know"
-    while lines and "let me know" in lines[-1].lower():
-        lines.pop()
-
-    return "\n".join(lines).strip()
+    cleaned_raw = ollama_chat(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        num_ctx=2048,
+        timeout=60,
+    )
+    return strip_fences_and_quotes(cleaned_raw)
 
 
-def call_model(system_prompt: str, user_prompt: str) -> str:
-    """Call local Ollama to generate the commit message, with spinner."""
-    ollama_url = resolve_ollama_url("http://localhost:11434")
-    model = os.getenv("AI_COMMIT_MODEL", os.getenv("INVESTIGATE_MODEL", "llama3.1:8b"))
+def ensure_bullets_for_files(message: str, changed_files: list[str]) -> str:
+    """
+    Ensure there is at least one bullet line mentioning each changed file.
 
-    payload = {
-        "model": model,
-        "num_ctx": 16000,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "stream": False,
-    }
+    If the model skipped a file, append a minimal bullet at the end:
+      - path: update
+    """
+    if not changed_files:
+        return message
 
+    lines = message.splitlines()
+
+    # Find body start (first blank line after summary)
+    body_start = 0
+    if lines:
+        for idx, ln in enumerate(lines):
+            if idx == 0:
+                continue  # summary
+            if not ln.strip():
+                body_start = idx + 1
+                break
+        else:
+            body_start = 1  # no blank line; treat everything after summary as body
+
+    body_lines = lines[body_start:]
+    present_paths: set[str] = set()
+
+    for ln in body_lines:
+        stripped = ln.lstrip()
+        if not stripped.startswith(("-", "*")):
+            continue
+        for path in changed_files:
+            if path in stripped:
+                present_paths.add(path)
+
+    missing = [p for p in changed_files if p not in present_paths]
+    if not missing:
+        return message
+
+    out_lines = lines[:]
+    if out_lines and out_lines[-1].strip():
+        out_lines.append("")  # ensure a blank line before auto bullets
+
+    for path in missing:
+        out_lines.append(f"- {path}: update")
+
+    return "\n".join(out_lines)
+
+
+def call_model(system_prompt: str, user_prompt: str, changed_files: list[str]) -> str:
+    """
+    Call local Ollama to generate the commit message, then:
+      1) run LLM sanitizer
+      2) enforce at least one bullet per changed file
+    """
     def _call():
-        resp = requests.post(
-            f"{ollama_url}/api/chat",
-            json=payload,
+        raw = ollama_chat(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            num_ctx=16000,
             timeout=180,
         )
-        resp.raise_for_status()
-        data = resp.json()
-        raw = data["message"]["content"]
-        return clean_commit_message(raw)
+        cleaned = clean_commit_message_llm(raw)
+        final = ensure_bullets_for_files(cleaned, changed_files)
+        return final
 
     try:
-        return _with_spinner("ai-commit generating", _call)
+        return with_spinner("ai-commit generating", _call)
     except Exception as e:
         print(f"[ai-commit] Error calling Ollama: {e}", file=sys.stderr)
         sys.exit(1)
 
 
-def paraphrase_message(original: str) -> str:
-    """Ask the model to rephrase the commit message."""
-    ollama_url = resolve_ollama_url("http://localhost:11434")
-    model = os.getenv("AI_COMMIT_MODEL", os.getenv("INVESTIGATE_MODEL", "llama3.1:8b"))
-
+def paraphrase_message(original: str, changed_files: list[str]) -> str:
+    """Ask the model to rephrase the commit message (meaning-preserving)."""
     system_prompt = dedent(
         """
-        You act as a commit-message rewriter.
+        You are a git commit message rewriter.
 
         Rewrite the provided commit message:
-
-          - keep the same meaning and intent
-          - imperative, present tense
-          - concise but clear
-          - optional wrapped body lines allowed
+        - Keep the same meaning and intent.
+        - Use imperative, present tense.
+        - Keep it concise but clear.
 
         Output:
-          - ONLY the rewritten commit message text.
-          - No commentary, backticks, or explanations.
+        - Only the rewritten commit message text.
+        - No commentary, backticks, or code fences.
         """
     ).strip()
 
-    user_prompt = (
-        "Rewrite the following git commit message:\n\n"
-        f"{original}\n"
-    )
-
-    payload = {
-        "model": model,
-        "num_ctx": 4096,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "stream": False,
-    }
+    user_prompt = f"Rewrite the following git commit message:\n\n{original}\n"
 
     def _call():
-        resp = requests.post(
-            f"{ollama_url}/api/chat",
-            json=payload,
+        raw = ollama_chat(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            num_ctx=4096,
             timeout=120,
         )
-        resp.raise_for_status()
-        data = resp.json()
-        raw = data["message"]["content"]
-        return clean_commit_message(raw)
+        cleaned = clean_commit_message_llm(raw)
+        final = ensure_bullets_for_files(cleaned, changed_files)
+        return final
 
     try:
-        return _with_spinner("ai-commit paraphrasing", _call)
+        return with_spinner("ai-commit paraphrasing", _call)
     except Exception as e:
         print(f"[ai-commit] Paraphrase failed: {e}", file=sys.stderr)
         return original
 
 
 # ---------------------------------------------------------------------------
-# Clipboard helper
+# Clipboard helper (thin wrapper around generic helper.clipboard)
 # ---------------------------------------------------------------------------
 
-def copy_to_clipboard(text: str) -> bool:
+
+def copy_commit_command_to_clipboard(command: str) -> bool:
     """
-    Best-effort clipboard copy.
+    Copy the git commit command to the clipboard using the shared helper.
 
-    Tries, in order:
-      - wl-copy (Wayland)
-      - xclip (X11)
-      - xsel (X11)
-      - pbcopy (macOS)
-      - clip.exe (WSL on Windows)
+    Returns:
+      True if copied, False otherwise.
     """
-    candidates = [
-        (["wl-copy"], "wl-copy"),
-        (["xclip", "-selection", "clipboard"], "xclip"),
-        (["xsel", "--clipboard", "--input"], "xsel"),
-        (["pbcopy"], "pbcopy"),
-        (["clip.exe"], "clip.exe"),
-    ]
-
-    for cmd, label in candidates:
-        try:
-            proc = subprocess.run(
-                cmd,
-                input=text,
-                text=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            if proc.returncode == 0:
-                print(
-                    f"[ai-commit] Commit command copied to clipboard via {label}.",
-                    file=sys.stderr,
-                )
-                return True
-        except FileNotFoundError:
-            continue
-        except Exception:
-            continue
-
-    print(
-        "[ai-commit] Could not copy to clipboard "
-        "(no wl-copy/xclip/xsel/pbcopy/clip.exe found).",
-        file=sys.stderr,
-    )
-    return False
+    success, backend = copy_to_clipboard(command)
+    if success:
+        print(
+            f"[ai-commit] Commit command copied to clipboard via {backend}.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "[ai-commit] Could not copy commit command to clipboard.",
+            file=sys.stderr,
+        )
+    return success
 
 
 # ---------------------------------------------------------------------------
 # CLI + menu
 # ---------------------------------------------------------------------------
+
 
 def parse_args(argv: list[str]) -> bool:
     """Return use_all (True if --all)."""
@@ -489,14 +422,12 @@ def print_git_command_hint(message: str) -> tuple[str, str]:
     body_lines = [ln for ln in lines[1:] if ln.strip()]
 
     escaped_summary = summary.replace('"', '\\"')
-
     cmd_lines = [f'git commit -m "{escaped_summary}"']
 
     for ln in body_lines:
         escaped = ln.replace('"', '\\"')
         cmd_lines.append(f'-m "{escaped}"')
 
-    # Join with backslashes for nice multi-line shell formatting
     full_cmd = " \\\n  ".join(cmd_lines)
 
     print("\nCopyable multi-line command:")
@@ -506,7 +437,7 @@ def print_git_command_hint(message: str) -> tuple[str, str]:
     return summary, full_cmd
 
 
-def interactive_menu(message: str) -> None:
+def interactive_menu(message: str, changed_files: list[str]) -> None:
     """Show message and allow: accept+clipboard, paraphrase, cancel."""
     current = message
     while True:
@@ -523,7 +454,7 @@ def interactive_menu(message: str) -> None:
 
         if choice in ("", "1"):
             if cmd:
-                copy_to_clipboard(cmd)
+                copy_commit_command_to_clipboard(cmd)
                 print(
                     "[ai-commit] Command printed above and copied (if clipboard tool was found).\n"
                     "            Paste it in your terminal to run the commit.",
@@ -538,12 +469,11 @@ def interactive_menu(message: str) -> None:
 
         elif choice == "2":
             print("[ai-commit] rewriting message...\n")
-            new_message = paraphrase_message(current)
+            new_message = paraphrase_message(current, changed_files)
             if not new_message or new_message == current:
                 print("[ai-commit] rewrite resulted in no change.", file=sys.stderr)
             else:
                 current = new_message
-            # loop again with updated message
 
         else:
             print("[ai-commit] Cancelled.", file=sys.stderr)
@@ -553,9 +483,10 @@ def interactive_menu(message: str) -> None:
 def main() -> None:
     use_all = parse_args(sys.argv[1:])
     diff = run_git_diff(use_all)
-    system_prompt, user_prompt = build_prompt(diff)
-    message = call_model(system_prompt, user_prompt)
-    interactive_menu(message)
+    changed_files = extract_changed_files(diff)
+    system_prompt, user_prompt = build_prompt(diff, changed_files)
+    message = call_model(system_prompt, user_prompt, changed_files)
+    interactive_menu(message, changed_files)
 
 
 if __name__ == "__main__":
