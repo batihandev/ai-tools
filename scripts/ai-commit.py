@@ -159,6 +159,7 @@ def build_prompt(diff: str, changed_files: list[str]) -> tuple[str, str]:
         - Return ONLY the commit message text.
         - No explanations, headings, or commentary.
         - No backticks or code fences.
+        - Do not write "Here is the commit message:" or similar.
         """
     ).strip()
 
@@ -215,10 +216,16 @@ def clean_commit_message_llm(text: str) -> str:
         - Do not add new content.
         - Do not wrap the result in backticks or code fences.
         - Do not add any commentary about the cleaning step.
+        - Do not talk about yourself.
+        - Do not change the meaning of any line.
+        - Do not add cleanup notes.
 
         Output:
         - Only the cleaned commit message text.
         - No explanations or extra text about the cleaning step.
+        - Check forbidden rules above carefully.
+        - Return the cleaned message as-is.
+        - Do not write "Here is the cleaned commit message:" or similar.
         """
     ).strip()
 
@@ -341,11 +348,13 @@ def paraphrase_message(base_message: str) -> str:
         - Keep the same meaning and intent.
         - Use imperative, present tense.
         - Keep it concise but clear.
+        - Remove any meta information or references to rewriting ex:"commit message rewritten".
+        - Remove any references to cleaning or formatting for THE commit message.
 
         Constraints:
-        - Output MUST be a single line (no newlines).
         - Do NOT add quotes or backticks.
         - Do NOT mention that you are rewriting or paraphrasing.
+        - Do NOT add explanations or extra text about the cleaning step.
         """
     ).strip()
 

@@ -4,7 +4,7 @@ import sys
 
 # Single soft context limit for all local LLM tools.
 # Override with LLM_SOFT_CONTEXT_LIMIT if you ever change models.
-_SOFT_CONTEXT_LIMIT = int(os.getenv("LLM_SOFT_CONTEXT_LIMIT", "12000"))
+_SOFT_CONTEXT_LIMIT = int(os.getenv("LLM_SOFT_CONTEXT_LIMIT", "40000"))
 
 
 def warn_if_approaching_context(label: str, text: str) -> None:
