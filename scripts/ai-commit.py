@@ -6,7 +6,7 @@ from textwrap import dedent
 from helper.spinner import with_spinner
 from helper.llm import ollama_chat, strip_fences_and_quotes
 from helper.clipboard import copy_to_clipboard
-
+from helper.context import warn_if_approaching_context
 """
 ai-commit – suggest git commit messages using local LLM (Llama 3.1:8b).
 
@@ -19,7 +19,7 @@ USAGE
   ai-commit --all
 """
 
-MAX_DIFF_CHARS = 12000  # only used for warnings, NOT truncation
+
 
 
 # ---------------------------------------------------------------------------
@@ -55,12 +55,7 @@ def run_git_diff(use_all: bool) -> str:
         print(f"[ai-commit] No {scope} changes to describe.", file=sys.stderr)
         sys.exit(1)
 
-    if len(diff) > MAX_DIFF_CHARS:
-        print(
-            f"[ai-commit] WARNING: diff is {len(diff)} characters; "
-            "model context may be tight.",
-            file=sys.stderr,
-        )
+    warn_if_approaching_context("ai-commit", diff)
 
     return diff
 
