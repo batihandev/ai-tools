@@ -1,22 +1,4 @@
 #!/usr/bin/env python3
-import os
-import sys
-from pathlib import Path
-from datetime import datetime
-from textwrap import dedent
-import threading
-import time
-
-import requests
-from helper.ollama_utils import resolve_ollama_url
-from helper.env import load_repo_dotenv
-load_repo_dotenv()
-
-BASE_DIR = Path(__file__).resolve().parents[1]
-PARSED_DIR = BASE_DIR / "parsed"
-PARSED_DIR.mkdir(exist_ok=True)
-
-
 """
 smart-parse – repair malformed JSON / code / text using local LLM.
 
@@ -54,6 +36,26 @@ cat broken.js | smart-parse
 cat broken.js | smart-parse ./outdir
 # → auto-named file under ./outdir
 """
+
+import os
+import sys
+from pathlib import Path
+from datetime import datetime
+from textwrap import dedent
+import threading
+import time
+
+import requests
+from helper.ollama_utils import resolve_ollama_url
+from helper.env import load_repo_dotenv
+load_repo_dotenv()
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+PARSED_DIR = BASE_DIR / "parsed"
+PARSED_DIR.mkdir(exist_ok=True)
+
+
+
 
 
 # ---------------------------------------------------------------------------

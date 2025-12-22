@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+"""
+ai-commit – suggest git commit messages using local LLM (Llama 3.1:8b).
+
+USAGE
+
+  # 1) Default: use staged changes (git diff --cached), interactive menu
+  ai-commit
+
+  # 2) Use unstaged working tree changes instead (git diff)
+  ai-commit --all
+"""
 import sys
 import subprocess
 
@@ -11,17 +22,7 @@ from helper.context import warn_if_approaching_context
 from helper.env import load_repo_dotenv
 load_repo_dotenv()
 
-"""
-ai-commit – suggest git commit messages using local LLM (Llama 3.1:8b).
 
-USAGE
-
-  # 1) Default: use staged changes (git diff --cached), interactive menu
-  ai-commit
-
-  # 2) Use unstaged working tree changes instead (git diff)
-  ai-commit --all
-"""
 
 
 # ---------------------------------------------------------------------------

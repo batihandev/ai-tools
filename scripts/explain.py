@@ -1,4 +1,38 @@
 #!/usr/bin/env python3
+"""
+explain – use local LLM to explain diffs, logs, code, configs, docs, or data.
+
+USAGE EXAMPLES
+--------------
+
+# 1) Explain git diffs from current repo
+explain --diff              # staged diff (git diff --cached)
+explain --diff --all        # working tree diff (git diff)
+explain git                 # alias for --diff
+
+# 2) Pipe a diff
+git diff --cached | explain
+
+# 3) Explain logs / text from a file or a pipe
+explain some.log
+journalctl -u mysvc | explain
+
+# 4) Reuse the last investigate log explicitly
+explain log
+explain logs
+
+# 5) Explain code / config / docs / data files directly
+explain scripts/runi.py
+explain config/app.yaml
+explain README.md
+explain data/report.csv
+
+# 6) Paste manually (interactive)
+explain
+<paste here>
+CTRL+D
+"""
+
 import os
 import sys
 import subprocess
@@ -68,39 +102,6 @@ TABLE_EXTS = {
     ".tsv",
 }
 
-"""
-explain – use local LLM to explain diffs, logs, code, configs, docs, or data.
-
-USAGE EXAMPLES
---------------
-
-# 1) Explain git diffs from current repo
-explain --diff              # staged diff (git diff --cached)
-explain --diff --all        # working tree diff (git diff)
-explain git                 # alias for --diff
-
-# 2) Pipe a diff
-git diff --cached | explain
-
-# 3) Explain logs / text from a file or a pipe
-explain some.log
-journalctl -u mysvc | explain
-
-# 4) Reuse the last investigate log explicitly
-explain log
-explain logs
-
-# 5) Explain code / config / docs / data files directly
-explain scripts/runi.py
-explain config/app.yaml
-explain README.md
-explain data/report.csv
-
-# 6) Paste manually (interactive)
-explain
-<paste here>
-CTRL+D
-"""
 
 
 # ---------------------------------------------------------------------------
