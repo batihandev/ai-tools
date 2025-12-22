@@ -1,10 +1,9 @@
 # ai-scripts
 
+## Description
+
 Personal CLI toolbox built around **Ollama** for working with logs, diffs, code, and text using a local LLM.
-
 Opinionated, lightweight, and designed for **Linux** and **Windows via WSL2**.
-
----
 
 ## Tools
 
@@ -14,8 +13,6 @@ Opinionated, lightweight, and designed for **Linux** and **Windows via WSL2**.
 - **smart-parse** – Repair malformed JSON / code / text
 - **runi** – Run a command, capture logs, investigate on failure
 
----
-
 ## Install
 
 ```bash
@@ -24,8 +21,6 @@ cp .env.example .env   # optional
 ```
 
 Requires Python 3.12+, `make`, and Ollama running locally.
-
----
 
 ## Usage
 
@@ -61,8 +56,6 @@ After that, you can run:
 
 Add the export line to your shell config (`~/.bashrc`, `~/.zshrc`, etc.) to make it permanent.
 
----
-
 ## Config
 
 Main env vars (see `.env.example`):
@@ -72,8 +65,6 @@ Main env vars (see `.env.example`):
 - `AI_COMMIT_MODEL`
 - `SMART_PARSE_MODEL`
 - `LLM_SOFT_CONTEXT_LIMIT`
-
----
 
 ## Notes
 
