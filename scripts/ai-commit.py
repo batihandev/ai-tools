@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 import sys
 import subprocess
-from helper.env import load_repo_dotenv
-load_repo_dotenv()
+
 from textwrap import dedent
 
 from helper.spinner import with_spinner
 from helper.llm import ollama_chat, strip_fences_and_quotes
 from helper.clipboard import copy_to_clipboard
 from helper.context import warn_if_approaching_context
+from helper.env import load_repo_dotenv
+load_repo_dotenv()
 
 """
 ai-commit – suggest git commit messages using local LLM (Llama 3.1:8b).
