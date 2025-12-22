@@ -9,6 +9,8 @@ import time
 
 import requests
 from helper.ollama_utils import resolve_ollama_url
+from helper.env import load_repo_dotenv
+load_repo_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 PARSED_DIR = BASE_DIR / "parsed"

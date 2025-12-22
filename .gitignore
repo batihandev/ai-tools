@@ -18,7 +18,6 @@ pip-wheel-metadata/
 # Local environment + editor
 # ------------------------------
 .env
-.env.*
 .vscode/
 .idea/
 .DS_Store

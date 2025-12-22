@@ -2,12 +2,16 @@
 import os
 import sys
 import subprocess
+
 from pathlib import Path
 from textwrap import dedent
 
 from helper.llm import ollama_chat, strip_fences_and_quotes
 from helper.spinner import with_spinner
 from helper.context import warn_if_approaching_context
+from helper.env import load_repo_dotenv
+load_repo_dotenv()
+
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 LOG_DIR = BASE_DIR / "logs"

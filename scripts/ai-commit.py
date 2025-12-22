@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import sys
 import subprocess
+from helper.env import load_repo_dotenv
+load_repo_dotenv()
 from textwrap import dedent
 
 from helper.spinner import with_spinner

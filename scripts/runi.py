@@ -3,6 +3,8 @@ import os
 import sys
 import subprocess
 from pathlib import Path
+from helper.env import load_repo_dotenv
+load_repo_dotenv()
 
 
 def main() -> None:

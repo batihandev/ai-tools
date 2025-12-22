@@ -7,6 +7,8 @@ from textwrap import dedent
 from helper.llm import ollama_chat, strip_fences_and_quotes
 from helper.spinner import with_spinner
 from helper.context import warn_if_approaching_context
+from helper.env import load_repo_dotenv
+load_repo_dotenv()
 
 DEFAULT_LINES = 100
 LINES_PER_PAGE = 80
