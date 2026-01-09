@@ -13,7 +13,7 @@ def warn_if_approaching_context(label: str, text: str) -> None:
     character limit for our local LLM.
 
     Args:
-        label: Short tag for the tool, e.g. "ai-commit" or "investigate".
+        label: Short tag for the tool, e.g. "ai_commit" or "investigate".
         text:  The input string that will be sent to the model.
     """
     length = len(text)

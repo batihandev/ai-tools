@@ -1,31 +1,31 @@
-# scripts/screen-explain.py
+# scripts/screen_explain.py
 #!/usr/bin/env python3
 """
-screen-explain — analyze recent screenshots with a local VLM (Ollama) and cache results.
+screen_explain — analyze recent screenshots with a local VLM (Ollama) and cache results.
 
 USAGE
   # 1) Latest screenshot from SCREENSHOT_DIR
-  screen-explain
+  screen_explain
 
   # 2) Latest N screenshots from SCREENSHOT_DIR
-  screen-explain 3
+  screen_explain 3
 
   # 3) Force a new run (bypass cache)
-  screen-explain new
-  screen-explain 3 new
+  screen_explain new
+  screen_explain 3 new
 
   # 4) Analyze a specific file
-  screen-explain /path/to/image.png
-  screen-explain path /path/to/image.png
+  screen_explain /path/to/image.png
+  screen_explain path /path/to/image.png
 
   # 5) Analyze a directory (latest N from that directory)
-  screen-explain /path/to/folder 5
-  screen-explain /path/to/folder 5 new
+  screen_explain /path/to/folder 5
+  screen_explain /path/to/folder 5 new
 
   # 6) Override model
-  screen-explain --model qwen2.5vl:3b
-  screen-explain 3 --model qwen2.5vl:3b
-  screen-explain /path/to/image.png --model qwen2.5vl:3b
+  screen_explain --model qwen2.5vl:3b
+  screen_explain 3 --model qwen2.5vl:3b
+  screen_explain /path/to/image.png --model qwen2.5vl:3b
 
 NOTES
   - Requires env var SCREENSHOT_DIR for default mode.
@@ -35,7 +35,7 @@ NOTES
   - Mirror:
       logs/vlm-mirror stores copies of inputs to avoid slow reads from /mnt/c (WSL/Windows FS).
       Retention: last 20 files and <= 100 MB total (oldest pruned).
-  - Errors are NOT cached (only written to logs/screen-explain-last.json and stderr).
+  - Errors are NOT cached (only written to logs/screen_explain-last.json and stderr).
 """
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ CACHE_DIR = LOG_DIR / "vlm-cache"
 CACHE_DIR.mkdir(exist_ok=True)
 
 CACHE_INDEX = CACHE_DIR / "index.json"  # fast-key -> content-key
-LAST_JSON = LOG_DIR / "screen-explain-last.json"
+LAST_JSON = LOG_DIR / "screen_explain-last.json"
 
 MIRROR_DIR = LOG_DIR / "vlm-mirror"
 MIRROR_DIR.mkdir(exist_ok=True)
@@ -117,7 +117,7 @@ def parse_args(argv: list[str]) -> Args:
         if count is None and a.isdigit():
             count = int(a)
             continue
-        print(f"[screen-explain] Unexpected arg: {a}", file=sys.stderr)
+        print(f"[screen_explain] Unexpected arg: {a}", file=sys.stderr)
         sys.exit(1)
 
     if target and target.isdigit() and count is None:
@@ -129,11 +129,11 @@ def parse_args(argv: list[str]) -> Args:
 def screenshot_dir() -> Path:
     p = os.getenv("SCREENSHOT_DIR")
     if not p:
-        print("[screen-explain] SCREENSHOT_DIR not set", file=sys.stderr)
+        print("[screen_explain] SCREENSHOT_DIR not set", file=sys.stderr)
         sys.exit(1)
     d = Path(p)
     if not d.exists():
-        print(f"[screen-explain] Not found: {d}", file=sys.stderr)
+        print(f"[screen_explain] Not found: {d}", file=sys.stderr)
         sys.exit(1)
     return d
 
@@ -357,12 +357,12 @@ def main() -> None:
             src_imgs = [p]
 
     if not src_imgs:
-        print("[screen-explain] No images found", file=sys.stderr)
+        print("[screen_explain] No images found", file=sys.stderr)
         sys.exit(1)
 
-    print(f"[screen-explain] Using {len(src_imgs)} image(s)")
+    print(f"[screen_explain] Using {len(src_imgs)} image(s)")
     for p in src_imgs:
-        print(f"[screen-explain]   - {p}")
+        print(f"[screen_explain]   - {p}")
 
     prompt = build_prompt(len(src_imgs))
 
@@ -387,7 +387,7 @@ def main() -> None:
         imgs = _ensure_mirrored(src_imgs)
         _prune_mirror_dir(MIRROR_MAX_FILES, MIRROR_MAX_BYTES)
     except Exception as e:
-        print(f"[screen-explain] Error: {e}", file=sys.stderr)
+        print(f"[screen_explain] Error: {e}", file=sys.stderr)
         sys.exit(1)
 
     # -------------------------
@@ -415,10 +415,10 @@ def main() -> None:
         )
 
     try:
-        result = with_spinner("screen-explain", _call)
+        result = with_spinner("screen_explain", _call)
     except Exception as e:
         # Do NOT cache errors. Only write LAST_JSON and stderr.
-        err = f"[screen-explain] Error: {e}"
+        err = f"[screen_explain] Error: {e}"
         LAST_JSON.write_text(err, encoding="utf-8")
         print(err, file=sys.stderr)
         sys.exit(1)

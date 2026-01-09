@@ -1,39 +1,39 @@
 #!/usr/bin/env python3
 """
-smart-parse – repair malformed JSON / code / text using local LLM.
+smart_parse – repair malformed JSON / code / text using local LLM.
 
 USAGE EXAMPLES
 --------------
 
 # 1) Paste content manually (stdin)
-smart-parse
+smart_parse
 <paste here>
 CTRL+D
-# → writes into ai-scripts/parsed/smart-parse-YYYYMMDD-HHMMSS.xxx
+# → writes into ai-scripts/parsed/smart_parse-YYYYMMDD-HHMMSS.xxx
 # → prints "code <path>" to open output file
 
 # 2) Paste content, choose output directory
-smart-parse ./outdir
+smart_parse ./outdir
 <paste>
 CTRL+D
-# → writes ./outdir/smart-parse-YYYYMMDD-HHMMSS.xxx
+# → writes ./outdir/smart_parse-YYYYMMDD-HHMMSS.xxx
 
 # 3) Parse broken file automatically
-smart-parse ./data/broken.json
+smart_parse ./data/broken.json
 # → writes ./data/broken.parsed.json
 
 # 4) Parse file, write into a different directory
-smart-parse ./data/broken.json ./repaired
+smart_parse ./data/broken.json ./repaired
 # → writes ./repaired/broken.parsed.json
 
 # 5) Parse file, explicit output file
-smart-parse ./data/broken.json ./repaired/fixed.json
+smart_parse ./data/broken.json ./repaired/fixed.json
 
 # 6) Pipe output of another command
-cat broken.js | smart-parse
+cat broken.js | smart_parse
 # → auto-named file under parsed/
 
-cat broken.js | smart-parse ./outdir
+cat broken.js | smart_parse ./outdir
 # → auto-named file under ./outdir
 """
 
@@ -115,10 +115,10 @@ def read_source() -> tuple[str, Path | None, Path | None]:
     Determine input source + optional explicit output path / directory.
 
     Signature:
-      smart-parse
-      smart-parse <out_path_or_dir>
-      smart-parse <input_file>
-      smart-parse <input_file> <out_path_or_dir>
+      smart_parse
+      smart_parse <out_path_or_dir>
+      smart_parse <input_file>
+      smart_parse <input_file> <out_path_or_dir>
 
     Resolution rules:
       - If stdin has data → stdin is the source (args only used for output).
@@ -141,7 +141,7 @@ def read_source() -> tuple[str, Path | None, Path | None]:
 
     if not argv:
         print(
-            "[smart-parse] Paste content, then press Ctrl+D.",
+            "[smart_parse] Paste content, then press Ctrl+D.",
             file=sys.stderr,
         )
         data = sys.stdin.read()
@@ -150,16 +150,16 @@ def read_source() -> tuple[str, Path | None, Path | None]:
     first = Path(argv[0]).expanduser()
 
     if first.exists() and first.is_file():
-        # smart-parse input_file [out]
+        # smart_parse input_file [out]
         src_path = first
         data = first.read_text(encoding="utf-8", errors="ignore")
         if len(argv) > 1:
             out_arg = Path(argv[1]).expanduser()
     else:
-        # smart-parse out_path_or_dir  (input from stdin)
+        # smart_parse out_path_or_dir  (input from stdin)
         out_arg = first
         print(
-            "[smart-parse] Paste content, then press Ctrl+D.",
+            "[smart_parse] Paste content, then press Ctrl+D.",
             file=sys.stderr,
         )
         data = sys.stdin.read()
@@ -179,7 +179,7 @@ def compute_output_path(
       - If out_arg is a file path (not an existing dir): use it as-is.
       - If out_arg is an existing dir: write under that dir.
       - If src_path exists and no explicit file: src_dir / name.parsed.ext
-      - Else: ai-scripts/parsed/smart-parse-<timestamp>.ext
+      - Else: ai-scripts/parsed/smart_parse-<timestamp>.ext
     """
     # explicit out_arg
     if out_arg is not None:
@@ -191,7 +191,7 @@ def compute_output_path(
             else:
                 ts = datetime.now().strftime("%Y%m%d-%H%M%S")
                 ext = _guess_ext(fixed)
-                return (out_arg / f"smart-parse-{ts}{ext}").resolve()
+                return (out_arg / f"smart_parse-{ts}{ext}").resolve()
         else:
             parent = out_arg.parent
             parent.mkdir(parents=True, exist_ok=True)
@@ -205,7 +205,7 @@ def compute_output_path(
 
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     ext = _guess_ext(fixed)
-    return (PARSED_DIR / f"smart-parse-{ts}{ext}").resolve()
+    return (PARSED_DIR / f"smart_parse-{ts}{ext}").resolve()
 
 
 def call_model(snippet: str) -> str:
@@ -261,11 +261,11 @@ def call_model(snippet: str) -> str:
         symbols = "|/-\\"
         idx = 0
         while not stop_flag["stop"]:
-            sys.stderr.write("\r[smart-parse] processing " + symbols[idx % 4])
+            sys.stderr.write("\r[smart_parse] processing " + symbols[idx % 4])
             sys.stderr.flush()
             idx += 1
             time.sleep(0.1)
-        sys.stderr.write("\r[smart-parse] processing done   \n")
+        sys.stderr.write("\r[smart_parse] processing done   \n")
         sys.stderr.flush()
 
     thread = threading.Thread(target=spinner, daemon=True)
@@ -280,7 +280,7 @@ def call_model(snippet: str) -> str:
         resp.raise_for_status()
         return resp.json()["message"]["content"]
     except Exception as e:
-        print(f"[smart-parse] Error calling Ollama: {e}", file=sys.stderr)
+        print(f"[smart_parse] Error calling Ollama: {e}", file=sys.stderr)
         sys.exit(1)
     finally:
         stop_flag["stop"] = True
@@ -291,7 +291,7 @@ def main() -> None:
     raw, src_path, out_arg = read_source()
 
     if not raw.strip():
-        print("[smart-parse] No input detected.", file=sys.stderr)
+        print("[smart_parse] No input detected.", file=sys.stderr)
         sys.exit(1)
 
     fixed = call_model(raw)

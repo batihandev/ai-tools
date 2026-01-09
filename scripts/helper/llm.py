@@ -4,7 +4,7 @@ from typing import Optional
 
 import requests
 
-from helper.ollama_utils import resolve_ollama_url
+from .ollama_utils import resolve_ollama_url
 
 
 def get_default_model() -> str:

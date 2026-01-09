@@ -10,7 +10,7 @@ SCRIPTS_DIR="$ROOT_DIR/scripts"
 mkdir -p "$BIN_DIR"
 
 for script in "$SCRIPTS_DIR"/*.py; do
-  [ -e "$script" ] || continue   # skip if no .py files
+  [ -e "$script" ] || continue
 
   base="$(basename "$script" .py)"
   target="$BIN_DIR/$base"
@@ -21,7 +21,6 @@ set -euo pipefail
 
 ROOT_DIR="$ROOT_DIR"
 VENV_PY="\$ROOT_DIR/.venv/bin/python3"
-MAIN="\$ROOT_DIR/scripts/$base.py"
 
 if [ ! -x "\$VENV_PY" ]; then
   echo "$base: venv Python not found at \$VENV_PY" >&2
@@ -29,12 +28,9 @@ if [ ! -x "\$VENV_PY" ]; then
   exit 1
 fi
 
-if [ ! -f "\$MAIN" ]; then
-  echo "$base: script not found at \$MAIN" >&2
-  exit 1
-fi
-
-exec "\$VENV_PY" "\$MAIN" "\$@"
+# Run as a module so scripts/* can use relative imports (from .helper import ...)
+cd "\$ROOT_DIR"
+exec "\$VENV_PY" -m "scripts.$base" "\$@"
 EOF
 
   chmod +x "$target"

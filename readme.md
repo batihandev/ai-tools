@@ -1,92 +1,73 @@
 # ai-scripts
 
-## Description
-
-Personal CLI toolbox built around **Ollama** for working with logs, diffs, code, and text using a local LLM.
-Opinionated, lightweight, and designed for **Linux** and **Windows via WSL2**.
-
-Runs fully local. No cloud services.
-
-## Tools
-
-- **ai-commit** – Generate structured git commit messages from diffs
-- **investigate** – Analyze logs (debug / summary / blame)
-- **explain** – Explain diffs, code, configs, docs, or logs
-- **smart-parse** – Repair malformed JSON / code / text
-- **runi** – Run a command, capture logs, investigate on failure
-- **screen-explain** – Analyze screenshots / UI states using a local vision-capable model
-
-## Install
-
 ```bash
-make install
-cp .env.example .env   # optional
+bin/explain --diff
+python scripts/explain.py --diff
 ```
 
-Requires Python 3.12+, `make`, and Ollama running locally.
+- smart_parse
 
-## Usage
-
-One example per tool (bin wrapper and direct Python):
-
-- ai-commit
-
-  ```bash
-  bin/ai-commit
-  python scripts/ai-commit.py
-  ```
-
-- investigate
-
-  ```bash
-  bin/investigate logs/app.log
-  python scripts/investigate.py logs/app.log
-  ```
-
-- explain
-
-  ```bash
-  bin/explain --diff
-  python scripts/explain.py --diff
-  ```
-
-- smart-parse
-
-  ```bash
-  bin/smart-parse broken.json
-  python scripts/smart-parse.py broken.json
-  ```
+```bash
+bin/smart_parse broken.json
+python scripts/smart_parse.py broken.json
+```
 
 - runi
 
-  ```bash
-  bin/runi pytest
-  python scripts/runi.py pytest
-  ```
+```bash
+bin/runi pytest
+python scripts/runi.py pytest
+```
 
-- screen-explain
+- screen_explain
 
-  ```bash
-  bin/screen-explain
-  python scripts/screen-explain.py
-  ```
+```bash
+bin/screen_explain
+python scripts/screen_explain.py
+```
+
+- english-teacher
+
+```bash
+bin/english-teacher --mode coach "hello i am fine"
+python -m scripts.english_teacher --mode coach "hello i am fine"
+```
+
+## Server + UI
+
+- Backend (FastAPI):
+
+```bash
+make server
+```
+
+Runs on `http://127.0.0.1:8008`.
+
+- Frontend (Vite):
+
+```bash
+make frontend-dev
+```
+
+Runs on `http://127.0.0.1:5173`.
 
 ## PATH setup (optional)
 
 To run the tools directly without typing `bin/`, add the repo’s `bin/` directory to your PATH:
 
-```
+```bash
 export PATH="$HOME/personal/ai-scripts/bin:$PATH"
 ```
 
 After that, you can run:
 
-```
-ai-commit
+```bash
+ai_commit
 investigate
 explain --diff
-smart-parse broken.json
+smart_parse broken.json
 runi pytest
+english-teacher --mode coach "hello i am fine"
 ```
 
 Add the export line to your shell config (`~/.bashrc`, `~/.zshrc`, etc.) to make it permanent.
@@ -104,6 +85,13 @@ Main env vars (see `.env.example`):
 - `SCREENSHOT_DIR`
 - `VLM_MODEL`
 - `VLM_DEBUG`
+
+English teacher:
+
+- `ENGLISH_TEACHER_MODEL`
+- `ENGLISH_TEACHER_NUM_CTX`
+- `ENGLISH_TEACHER_TIMEOUT`
+- `ENGLISH_TEACHER_MODE`
 
 ## Notes
 

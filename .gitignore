@@ -32,7 +32,7 @@ bin/*
 !bin/.gitkeep
 
 # ------------------------------
-# Investigate logs + smart-parse output
+# Investigate logs + smart_parse output
 # auto-generated, keep out of git
 # ------------------------------
 logs/

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-ai-commit – suggest git commit messages using local LLM (Llama 3.1:8b).
+ai_commit – suggest git commit messages using local LLM (Llama 3.1:8b).
 
 USAGE
 
   # 1) Default: use staged changes (git diff --cached), interactive menu
-  ai-commit
+  ai_commit
 
   # 2) Use unstaged working tree changes instead (git diff)
-  ai-commit --all
+  ai_commit --all
 """
 import sys
 import subprocess
@@ -42,12 +42,12 @@ def run_git_diff(use_all: bool) -> str:
             check=False,
         )
     except FileNotFoundError:
-        print("[ai-commit] git not found on PATH.", file=sys.stderr)
+        print("[ai_commit] git not found on PATH.", file=sys.stderr)
         sys.exit(1)
 
     if result.returncode != 0:
         print(
-            f"[ai-commit] git diff failed:\n{result.stderr}",
+            f"[ai_commit] git diff failed:\n{result.stderr}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -55,10 +55,10 @@ def run_git_diff(use_all: bool) -> str:
     diff = result.stdout
     if not diff.strip():
         scope = "staged" if not use_all else "working tree"
-        print(f"[ai-commit] No {scope} changes to describe.", file=sys.stderr)
+        print(f"[ai_commit] No {scope} changes to describe.", file=sys.stderr)
         sys.exit(1)
 
-    warn_if_approaching_context("ai-commit", diff)
+    warn_if_approaching_context("ai_commit", diff)
 
     return diff
 
@@ -102,7 +102,7 @@ def extract_changed_files(diff: str) -> list[str]:
         if line.startswith("diff --git"):
             parts = line.split()
             if len(parts) >= 4:
-                b_part = parts[3]  # e.g., "b/scripts/ai-commit.py"
+                b_part = parts[3]  # e.g., "b/scripts/ai_commit.py"
                 path = b_part[2:] if b_part.startswith("b/") else b_part
                 changed.add(path)
 
@@ -315,9 +315,9 @@ def call_model(system_prompt: str, user_prompt: str, changed_files: list[str]) -
         return final
 
     try:
-        return with_spinner("ai-commit generating", _call)
+        return with_spinner("ai_commit generating", _call)
     except Exception as e:
-        print(f"[ai-commit] Error calling Ollama: {e}", file=sys.stderr)
+        print(f"[ai_commit] Error calling Ollama: {e}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -376,7 +376,7 @@ def paraphrase_message(base_message: str) -> str:
         if not new_summary:
             new_summary = summary
     except Exception as e:
-        print(f"[ai-commit] Paraphrase failed, keeping original summary: {e}", file=sys.stderr)
+        print(f"[ai_commit] Paraphrase failed, keeping original summary: {e}", file=sys.stderr)
         return base_message
 
     if body:
@@ -399,12 +399,12 @@ def copy_commit_command_to_clipboard(command: str) -> bool:
     success, backend = copy_to_clipboard(command)
     if success:
         print(
-            f"[ai-commit] Commit command copied to clipboard via {backend}.",
+            f"[ai_commit] Commit command copied to clipboard via {backend}.",
             file=sys.stderr,
         )
     else:
         print(
-            "[ai-commit] Could not copy commit command to clipboard.",
+            "[ai_commit] Could not copy commit command to clipboard.",
             file=sys.stderr,
         )
     return success
@@ -426,8 +426,8 @@ def parse_args(argv: list[str]) -> bool:
             print(__doc__ or "")
             sys.exit(0)
         else:
-            print(f"[ai-commit] Unknown argument: {arg}", file=sys.stderr)
-            print("Usage: ai-commit [--all]", file=sys.stderr)
+            print(f"[ai_commit] Unknown argument: {arg}", file=sys.stderr)
+            print("Usage: ai_commit [--all]", file=sys.stderr)
             sys.exit(1)
 
     return use_all
@@ -489,7 +489,7 @@ def interactive_menu(
         _, cmd = print_git_command_hint(current)
 
         print(
-            "[ai-commit] Choose an action:\n"
+            "[ai_commit] Choose an action:\n"
             "  1) Accept this message (copy command to clipboard)\n"
             "  2) Paraphrase / rewrite SUMMARY line\n"
             "  3) Retry generation (new commit message)\n"
@@ -502,33 +502,33 @@ def interactive_menu(
             if cmd:
                 copy_commit_command_to_clipboard(cmd)
                 print(
-                    "[ai-commit] Command printed above and copied (if clipboard tool was found).\n"
+                    "[ai_commit] Command printed above and copied (if clipboard tool was found).\n"
                     "            Paste it in your terminal to run the commit.",
                     file=sys.stderr,
                 )
             else:
                 print(
-                    "[ai-commit] No valid summary line, nothing copied.",
+                    "[ai_commit] No valid summary line, nothing copied.",
                     file=sys.stderr,
                 )
             return
 
         elif choice == "2":
-            print("[ai-commit] rewriting SUMMARY line...\n")
+            print("[ai_commit] rewriting SUMMARY line...\n")
             new_message = paraphrase_message(base_message)
             if not new_message or new_message == current:
-                print("[ai-commit] rewrite resulted in no visible change.", file=sys.stderr)
+                print("[ai_commit] rewrite resulted in no visible change.", file=sys.stderr)
             else:
                 current = new_message
 
         elif choice == "3":
-            print("[ai-commit] regenerating commit message...\n", file=sys.stderr)
+            print("[ai_commit] regenerating commit message...\n", file=sys.stderr)
             # New base from the same diff & prompts, no extra git work.
             base_message = call_model(system_prompt, user_prompt, changed_files)
             current = base_message
 
         else:
-            print("[ai-commit] Cancelled.", file=sys.stderr)
+            print("[ai_commit] Cancelled.", file=sys.stderr)
             return
 
 
