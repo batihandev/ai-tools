@@ -6,7 +6,7 @@ import os
 import sys
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import List, Optional, TypedDict
 
 # IMPORTANT: relative imports (works when imported as scripts.english_teacher)
 from .helper.env import load_repo_dotenv
@@ -73,12 +73,18 @@ def _build_system_prompt(mode: str) -> str:
         """
         You are an English conversation coach for a non-native speaker.
 
+        Important context:
+        - The user's input is produced by a speech-to-text system.
+        - Treat punctuation and casing as unreliable artifacts of transcription.
+        - Focus on spoken English: wording, grammar, clarity, and natural phrasing.
+        - Do not nitpick punctuation/capitalization unless it changes the meaning.
+
         Goals:
         - Preserve the user's intended meaning.
         - Correct grammar and wording with minimal changes.
         - Highlight only the most important mistakes (avoid overwhelming the user).
         - Provide pronunciation tips for words that are commonly mispronounced
-          OR appear to be pronounced incorrectly by learners.
+          OR likely to be mispronounced by learners.
 
         If the user's text is unclear:
         - Make your best guess, but also ask a short clarifying question.
@@ -134,7 +140,7 @@ def _build_system_prompt(mode: str) -> str:
 def _build_user_prompt(text: str) -> str:
     return dedent(
         f"""
-        User said:
+        User said (speech-to-text transcript):
         {text}
 
         Return strictly valid JSON matching the schema.
@@ -179,7 +185,6 @@ def teach(text: str, mode: str = DEFAULT_MODE, cfg: Optional[TeachCfg] = None) -
     if cfg is None:
         cfg = TeachCfg(mode=mode)
 
-    # Validate mode early
     if mode not in ("coach", "strict", "correct"):
         mode = "coach"
 
@@ -189,7 +194,7 @@ def teach(text: str, mode: str = DEFAULT_MODE, cfg: Optional[TeachCfg] = None) -
     raw = ollama_chat(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
-        model=cfg.model,          # if your helper supports model param; if not, remove
+        model=cfg.model,
         num_ctx=cfg.num_ctx,
         timeout=cfg.timeout,
     )
@@ -202,7 +207,10 @@ def teach(text: str, mode: str = DEFAULT_MODE, cfg: Optional[TeachCfg] = None) -
 
 def _format_cli(out: TeachOut) -> str:
     if out.get("raw_error"):
-        return "Error: model did not return valid JSON.\n\nRaw output:\n" + (out.get("raw_output") or out.get("reply") or "")
+        return (
+            "Error: model did not return valid JSON.\n\nRaw output:\n"
+            + (out.get("raw_output") or out.get("reply") or "")
+        )
 
     lines: List[str] = []
     lines.append(f"Corrected (natural): {out.get('corrected_natural', '').strip()}")
@@ -318,7 +326,6 @@ def main() -> None:
     def _run() -> TeachOut:
         return teach(text, mode=mode)
 
-    # Spinner only for human terminal output
     if sys.stdout.isatty() and not json_out:
         out = with_spinner("english-teacher", _run)
     else:
