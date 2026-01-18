@@ -40,6 +40,7 @@ NOTES
 from __future__ import annotations
 
 import hashlib
+import heapq
 import json
 import os
 import re
@@ -50,9 +51,10 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Any, Optional, Tuple
 
-from helper.env import load_repo_dotenv
-from helper.spinner import with_spinner
-from helper.vlm import ollama_chat_with_images
+from .helper.env import load_repo_dotenv
+from .helper.spinner import with_spinner
+from .helper.vlm import ollama_chat_with_images
+
 
 load_repo_dotenv()
 
@@ -75,7 +77,10 @@ MIRROR_MAX_BYTES = 100 * 1024 * 1024  # 100 MB
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 
-_JSON_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*\n(.*?)\n\s*```\s*$", re.DOTALL | re.IGNORECASE)
+_JSON_FENCE_RE = re.compile(
+    r"^\s*```(?:json)?\s*\n(.*?)\n\s*```\s*$",
+    re.DOTALL | re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -84,12 +89,14 @@ class Args:
     count: int | None
     model: str | None
     force_new: bool
-    quality: bool  
+    quality: bool
+
 
 def parse_args(argv: list[str]) -> Args:
     if any(a in ("-h", "--help", "help") for a in argv):
         print(__doc__.strip())
         sys.exit(0)
+
     target: Optional[str] = None
     count: Optional[int] = None
     model: Optional[str] = None
@@ -126,6 +133,7 @@ def parse_args(argv: list[str]) -> Args:
 
     return Args(target=target, count=count, model=model, force_new=force_new, quality=quality)
 
+
 def screenshot_dir() -> Path:
     p = os.getenv("SCREENSHOT_DIR")
     if not p:
@@ -139,37 +147,61 @@ def screenshot_dir() -> Path:
 
 
 def pick_images(folder: Path, n: int) -> list[Path]:
-    imgs = sorted(
-        [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS],
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    return imgs[:n]
+    """
+    Faster than building and sorting a full list.
+    Uses scandir + nlargest to avoid O(M log M) sorting for large folders.
+    """
+    entries: list[tuple[int, Path]] = []
+    try:
+        with os.scandir(folder) as it:
+            for e in it:
+                try:
+                    if not e.is_file():
+                        continue
+                    ext = Path(e.name).suffix.lower()
+                    if ext not in IMAGE_EXTS:
+                        continue
+                    st = e.stat()
+                    entries.append((st.st_mtime_ns, Path(e.path)))
+                except FileNotFoundError:
+                    continue
+                except PermissionError:
+                    continue
+    except FileNotFoundError:
+        return []
+
+    top = heapq.nlargest(n, entries, key=lambda t: t[0])
+    return [p for _mt, p in top]
 
 
 def build_prompt(n: int) -> str:
-    return dedent(f"""
-    You are a precise screenshot/UI analyst for developers.
+    return (
+        dedent(
+            f"""
+        You are a precise screenshot/UI analyst for developers.
 
-    Rules:
-    - Describe what is visible on screen.
-    - Identify errors or anomalies.
-    - Suggest concrete next checks.
-    - Return STRICT JSON only.
-    - No markdown. No explanations.
+        Rules:
+        - Describe what is visible on screen.
+        - Identify errors or anomalies.
+        - Suggest concrete next checks.
+        - Return STRICT JSON only.
+        - No markdown. No explanations.
 
-    Analyze {n} screenshot(s).
+        Analyze {n} screenshot(s).
 
-    {{
-      "context": "...",
-      "detected_text": [],
-      "ui_elements": [],
-      "issues": [],
-      "hypotheses": [],
-      "next_checks": [],
-      "uncertainties": []
-    }}
-    """).strip()
+        {{
+          "context": "...",
+          "detected_text": [],
+          "ui_elements": [],
+          "issues": [],
+          "hypotheses": [],
+          "next_checks": [],
+          "uncertainties": []
+        }}
+        """
+        )
+        .strip()
+    )
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -212,6 +244,13 @@ def _try_parse_json(maybe: Any) -> tuple[Optional[Any], Optional[str]]:
     return parsed, raw
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
 def _read_index() -> dict[str, str]:
     try:
         if CACHE_INDEX.exists():
@@ -224,12 +263,17 @@ def _read_index() -> dict[str, str]:
 
 
 def _write_index(idx: dict[str, str]) -> None:
-    CACHE_INDEX.write_text(json.dumps(idx, indent=2, ensure_ascii=False), encoding="utf-8")
+    _atomic_write_text(CACHE_INDEX, json.dumps(idx, indent=2, ensure_ascii=False))
 
 
 def _fast_sig_for_file(p: Path) -> str:
+    """
+    IMPORTANT:
+    - Do not include absolute paths (WSL/Windows path forms differ).
+    - Use stable metadata: name + size + mtime_ns.
+    """
     st = p.stat()
-    return f"{str(p.resolve())}|{st.st_size}|{st.st_mtime_ns}"
+    return f"{p.name}|{st.st_size}|{st.st_mtime_ns}"
 
 
 def _fast_key(imgs: list[Path], prompt: str, model: str | None) -> str:
@@ -240,11 +284,15 @@ def _fast_key(imgs: list[Path], prompt: str, model: str | None) -> str:
 
 
 def _content_hash_images(imgs: list[Path]) -> str:
+    """
+    Avoid reading image bytes for caching.
+    Since inputs are mirrored into a controlled folder and never mutated,
+    metadata signature is sufficient and much faster.
+    """
     h = hashlib.sha256()
     for p in imgs:
-        b = p.read_bytes()
-        h.update(b)
-        h.update(b"\n--file-sep--\n")
+        st = p.stat()
+        h.update(f"{p.name}|{st.st_size}|{st.st_mtime_ns}\n".encode("utf-8"))
     return h.hexdigest()
 
 
@@ -272,9 +320,9 @@ def _read_cached(ck: str) -> Optional[str]:
 def _write_cache(ck: str, text: str, is_json: bool) -> None:
     cache_json_path, cache_txt_path = _cache_paths(ck)
     if is_json:
-        cache_json_path.write_text(text, encoding="utf-8")
+        _atomic_write_text(cache_json_path, text)
     else:
-        cache_txt_path.write_text(text, encoding="utf-8")
+        _atomic_write_text(cache_txt_path, text)
 
 
 def _mirror_name_for(src: Path, idx: int) -> str:
@@ -293,7 +341,8 @@ def _ensure_mirrored(srcs: list[Path]) -> list[Path]:
         if dst.exists():
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
+        # copyfile is often faster than copy2; we don't need full metadata fidelity here
+        shutil.copyfile(src, dst)
     return dsts
 
 
@@ -376,7 +425,7 @@ def main() -> None:
         if ck:
             cached_text = _read_cached(ck)
             if cached_text is not None:
-                LAST_JSON.write_text(cached_text, encoding="utf-8")
+                _atomic_write_text(LAST_JSON, cached_text)
                 print(cached_text)
                 return
 
@@ -395,14 +444,14 @@ def main() -> None:
     # -------------------------
     idx = _read_index()
     fk = _fast_key(src_imgs, prompt, args.model)  # original files metadata
-    ck = _content_key(imgs, prompt, args.model)   # mirrored content
+    ck = _content_key(imgs, prompt, args.model)   # mirrored metadata signature
     idx[fk] = ck
     _write_index(idx)
 
     if not args.force_new:
         cached_text = _read_cached(ck)
         if cached_text is not None:
-            LAST_JSON.write_text(cached_text, encoding="utf-8")
+            _atomic_write_text(LAST_JSON, cached_text)
             print(cached_text)
             return
 
@@ -411,7 +460,7 @@ def main() -> None:
             user_prompt=prompt,
             image_paths=imgs,
             model=args.model,
-            quality_mode=args.quality,  
+            quality_mode=args.quality,
         )
 
     try:
@@ -419,7 +468,7 @@ def main() -> None:
     except Exception as e:
         # Do NOT cache errors. Only write LAST_JSON and stderr.
         err = f"[screen_explain] Error: {e}"
-        LAST_JSON.write_text(err, encoding="utf-8")
+        _atomic_write_text(LAST_JSON, err)
         print(err, file=sys.stderr)
         sys.exit(1)
 
@@ -428,13 +477,13 @@ def main() -> None:
     if parsed is not None:
         out_text = json.dumps(parsed, indent=2, ensure_ascii=False)
         _write_cache(ck, out_text, is_json=True)
-        LAST_JSON.write_text(out_text, encoding="utf-8")
+        _atomic_write_text(LAST_JSON, out_text)
         print(out_text)
         return
 
     raw_text = raw if raw is not None else str(result)
     _write_cache(ck, raw_text, is_json=False)
-    LAST_JSON.write_text(raw_text, encoding="utf-8")
+    _atomic_write_text(LAST_JSON, raw_text)
     print(raw_text)
 
 

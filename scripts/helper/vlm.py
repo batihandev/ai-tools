@@ -11,7 +11,7 @@ from typing import Any, List, Optional, Tuple
 import requests
 from PIL import Image
 
-from helper.ollama_utils import resolve_ollama_url
+from .ollama_utils import resolve_ollama_url
 
 # ============================================================
 # One-toggle debug
