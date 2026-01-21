@@ -12,3 +12,8 @@ export type LatestResult = {
   raw_text: string;
   literal_text: string;
 };
+
+export type OllamaHealth = {
+  ollama_status: "online" | "offline" | "error";
+  ollama_url: string;
+};

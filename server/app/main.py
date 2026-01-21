@@ -26,11 +26,15 @@ from .schemas import (
 from sqlalchemy import select
 from pydantic import BaseModel
 from scripts.english_teacher import teach
+from scripts.helper.ollama_utils import resolve_ollama_url
+import httpx
 
 # Single source of truth for STT
 from scripts.voice_capture import transcribe_file
 
 load_dotenv()
+
+OLLAMA_URL = resolve_ollama_url("http://localhost:11434")
 
 
 def to_wav_16k_mono(src_path: str, dst_path: str) -> None:
@@ -70,6 +74,41 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="ai-scripts local server", lifespan=lifespan)
 
 
+class HealthOut(BaseModel):
+    ollama_status: str
+    ollama_url: str
+
+
+@app.get("/api/health", response_model=HealthOut)
+async def health_check():
+    """Check if Ollama is accessible"""
+    status = "offline"
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            try:
+                resp = await client.get(f"{OLLAMA_URL}/api/tags", follow_redirects=True)
+                if resp.status_code == 200:
+                    status = "online"
+                    print(f"[Health] ✓ Ollama online at {OLLAMA_URL}")
+                else:
+                    print(f"[Health] Ollama responded with {resp.status_code} at {OLLAMA_URL}")
+                    status = "error"
+            except httpx.ConnectError as e:
+                print(f"[Health] Connection error to {OLLAMA_URL}: {e}")
+                status = "offline"
+            except httpx.TimeoutException as e:
+                print(f"[Health] Timeout connecting to {OLLAMA_URL}: {e}")
+                status = "offline"
+            except Exception as e:
+                print(f"[Health] Error checking Ollama at {OLLAMA_URL}: {type(e).__name__}: {e}")
+                status = "error"
+    except Exception as e:
+        print(f"[Health] Unexpected error: {type(e).__name__}: {e}")
+        status = "offline"
+    
+    return HealthOut(ollama_status=status, ollama_url=OLLAMA_URL)
+
+
 
 @app.post("/api/voice/transcribe", response_model=TranscriptCreateOut)
 async def transcribe_voice(
@@ -84,9 +123,17 @@ async def transcribe_voice(
     wav_tmp_path: str | None = None
 
     try:
+        audio_bytes = await audio.read()
+        
+        # Validate audio size (minimum 4KB, maximum 100MB)
+        if len(audio_bytes) < 4096:
+            raise HTTPException(status_code=400, detail="Audio file too small (likely empty or corrupted)")
+        if len(audio_bytes) > 100 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Audio file too large (max 100MB)")
+        
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix or ".webm") as tmp:
             src_tmp_path = tmp.name
-            tmp.write(await audio.read())
+            tmp.write(audio_bytes)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as wtmp:
             wav_tmp_path = wtmp.name

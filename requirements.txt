@@ -13,3 +13,4 @@ faster-whisper
 python-multipart
 onnxruntime
 onnxruntime-gpu
+httpx

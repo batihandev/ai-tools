@@ -129,8 +129,10 @@ export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
 
       if (!resp.ok) {
         const err = await readJson<ApiErr>(resp).catch((): ApiErr => ({}));
-        setStatus(`Error: ${err?.detail ?? "unknown"}`);
-        return;
+        const detail = err?.detail ?? `HTTP ${resp.status}`;
+        console.error("Transcribe API error:", detail);
+        setStatus(`Error: ${detail}`);
+        throw new Error(detail);
       }
 
       const out = await readJson<TranscribeApiOk>(resp);
@@ -189,20 +191,33 @@ export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
       chunksRef.current = [];
 
       // Ignore accidental ultra-short chunks (common on stop/start)
-      if (blob.size < 4000) {
+      if (blob.size < 4096) {
+        console.log(`Skipping tiny blob: ${blob.size} bytes`);
         if (isListeningRef.current) startNewRecorder();
         return;
       }
 
+      // Log blob info for debugging
+      console.log(`Processing audio blob: ${blob.size} bytes, type: ${blob.type}`);
+
       try {
         await uploadUtterance(blob);
+      } catch (err) {
+        console.error("Upload failed:", err);
+        setStatus(`Error: ${err instanceof Error ? err.message : "Upload failed"}`);
       } finally {
         if (isListeningRef.current) startNewRecorder();
       }
     };
 
     recorderRef.current = recorder;
-    recorder.start(250);
+    
+    // Wait a tick to ensure stream is fully ready
+    setTimeout(() => {
+      if (recorder.state === "inactive") {
+        recorder.start(250);
+      }
+    }, 50);
   }, [uploadUtterance]);
 
   const loopVAD = useCallback(() => {
