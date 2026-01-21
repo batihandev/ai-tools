@@ -81,7 +81,7 @@ export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
   }, [isListening]);
 
   const onNewTranscriptRef = useRef<UseVoiceCaptureOpts["onNewTranscript"]>(
-    opts?.onNewTranscript
+    opts?.onNewTranscript,
   );
   useEffect(() => {
     onNewTranscriptRef.current = opts?.onNewTranscript;
@@ -158,7 +158,7 @@ export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
 
       await refreshHistory();
     },
-    [refreshHistory]
+    [refreshHistory],
   );
 
   const startNewRecorder = useCallback(() => {
@@ -198,20 +198,24 @@ export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
       }
 
       // Log blob info for debugging
-      console.log(`Processing audio blob: ${blob.size} bytes, type: ${blob.type}`);
+      console.log(
+        `Processing audio blob: ${blob.size} bytes, type: ${blob.type}`,
+      );
 
       try {
         await uploadUtterance(blob);
       } catch (err) {
         console.error("Upload failed:", err);
-        setStatus(`Error: ${err instanceof Error ? err.message : "Upload failed"}`);
+        setStatus(
+          `Error: ${err instanceof Error ? err.message : "Upload failed"}`,
+        );
       } finally {
         if (isListeningRef.current) startNewRecorder();
       }
     };
 
     recorderRef.current = recorder;
-    
+
     // Wait a tick to ensure stream is fully ready
     setTimeout(() => {
       if (recorder.state === "inactive") {
@@ -344,7 +348,7 @@ export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
         "- Captures quieter speech",
         "- More likely to trigger on noise",
       ].join("\n"),
-    []
+    [],
   );
 
   return {
