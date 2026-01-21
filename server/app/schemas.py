@@ -27,6 +27,19 @@ class TranscriptOut(BaseModel):
 # ----------------------------
 # English teacher
 # ----------------------------
+
+class Mistake(BaseModel):
+    frm: str
+    to: str
+    why: str
+
+
+class Pronunciation(BaseModel):
+    word: str
+    ipa: str
+    cue: str
+
+
 class TeachIn(BaseModel):
     text: str = Field(min_length=1)
     mode: str | None = Field(default=None)
@@ -36,8 +49,8 @@ class TeachIn(BaseModel):
 class TeachOut(BaseModel):
     corrected_natural: str = ""
     corrected_literal: str = ""
-    mistakes: list[dict[str, Any]] = Field(default_factory=list)
-    pronunciation: list[dict[str, Any]] = Field(default_factory=list)
+    mistakes: list[Mistake] = Field(default_factory=list)
+    pronunciation: list[Pronunciation] = Field(default_factory=list)
     reply: str = ""
     follow_up_question: str = ""
     raw_error: bool = False
@@ -53,6 +66,11 @@ class TeacherReplyOut(BaseModel):
 
 class TeacherHistoryOut(BaseModel):
     items: list[TeacherReplyOut]
+
+
+class TeacherModeInfo(BaseModel):
+    name: str
+    description: str
 
 
 class ChatSaveIn(BaseModel):

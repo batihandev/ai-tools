@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import List, Optional, TypedDict
+from typing import List, Optional
+
+from pydantic import BaseModel, Field
 
 # IMPORTANT: relative imports (works when imported as scripts.english_teacher)
 from .helper.env import load_repo_dotenv
@@ -28,32 +31,36 @@ DEFAULT_NUM_CTX = int(os.getenv("ENGLISH_TEACHER_NUM_CTX", "4096"))
 DEFAULT_TIMEOUT = int(os.getenv("ENGLISH_TEACHER_TIMEOUT", "60"))
 DEFAULT_MODE = os.getenv("ENGLISH_TEACHER_MODE", "coach")  # coach|strict|correct
 
+# Temperature for JSON tasks (lower = more deterministic)
+DEFAULT_TEMPERATURE = 0.3
+DEFAULT_TOP_P = 0.9
+
 
 # -----------------------------------------------------------------------------
-# Types
+# Types (Pydantic Models)
 # -----------------------------------------------------------------------------
 
-class Mistake(TypedDict):
+class Mistake(BaseModel):
     frm: str
     to: str
     why: str
 
 
-class Pronunciation(TypedDict):
+class Pronunciation(BaseModel):
     word: str
     ipa: str
     cue: str
 
 
-class TeachOut(TypedDict, total=False):
-    corrected_natural: str
-    corrected_literal: str
-    mistakes: List[Mistake]
-    pronunciation: List[Pronunciation]
-    reply: str
-    follow_up_question: str
-    raw_error: bool
-    raw_output: str
+class TeachOut(BaseModel):
+    corrected_natural: str = ""
+    corrected_literal: str = ""
+    mistakes: List[Mistake] = Field(default_factory=list)
+    pronunciation: List[Pronunciation] = Field(default_factory=list)
+    reply: str = ""
+    follow_up_question: str = ""
+    raw_error: bool = False
+    raw_output: str = ""
 
 
 @dataclass(frozen=True)
@@ -62,6 +69,8 @@ class TeachCfg:
     num_ctx: int = DEFAULT_NUM_CTX
     timeout: int = DEFAULT_TIMEOUT
     mode: str = DEFAULT_MODE
+    temperature: float = DEFAULT_TEMPERATURE
+    top_p: float = DEFAULT_TOP_P
 
 
 # -----------------------------------------------------------------------------
@@ -84,13 +93,18 @@ def _build_system_prompt(mode: str) -> str:
         - Correct grammar and wording with minimal changes.
         - Highlight only the most important mistakes (avoid overwhelming the user).
         - Provide pronunciation tips for words that are commonly mispronounced
-          OR likely to be mispronounced by learners.
+          OR likely to be mispronounced by learners. Use standard IPA notation.
+        - Use simple, intuitive pronunciation cues (e.g., "sounds like").
 
         If the user's text is unclear:
         - Make your best guess, but also ask a short clarifying question.
 
+        If the user's English is already perfect:
+        - Return empty lists for 'mistakes' and 'pronunciation'.
+        - Provide a brief, encouraging reply.
+
         HARD CONSTRAINT:
-        - Output MUST be strict JSON.
+        - Output MUST be strict, valid JSON.
         - No markdown, no code fences, no preambles, no trailing commentary.
         """
     ).strip()
@@ -99,16 +113,17 @@ def _build_system_prompt(mode: str) -> str:
         mode_block = dedent(
             """
             Mode: STRICT
-            - Be more thorough: include repeated or small mistakes if they matter.
-            - Include 1 short rule-of-thumb if helpful.
+            - Be thorough: include repeated or small mistakes if they matter.
+            - Include pronunciation for any word that might be mispronounced.
+            - Provide concise rule-of-thumb if helpful.
             """
         ).strip()
     elif mode == "correct":
         mode_block = dedent(
             """
             Mode: CORRECT ONLY
-            - Do NOT continue the conversation.
-            - Provide corrections only (reply must be empty).
+            - Do NOT continue the conversation or ask follow-up questions.
+            - Provide corrections only (leave 'reply' and 'follow_up_question' empty).
             """
         ).strip()
     else:
@@ -116,25 +131,59 @@ def _build_system_prompt(mode: str) -> str:
             """
             Mode: COACH
             - Continue the conversation naturally after corrections.
-            - Keep it practical and not overly formal.
+            - Keep it practical, friendly, and not overly formal.
+            - Engage with follow-up questions.
             """
         ).strip()
 
+    # One-shot example (golden output)
+    example_input = "I has been working here for three years now and I love this job so much"
+    example_output = {
+        "corrected_natural": "I've been working here for three years now, and I love this job so much.",
+        "corrected_literal": "I have been working here for three years, and I love this job very much.",
+        "mistakes": [
+            {
+                "frm": "I has been",
+                "to": "I have been",
+                "why": "Subject-verb agreement: 'I' uses 'have', not 'has'."
+            }
+        ],
+        "pronunciation": [
+            {
+                "word": "working",
+                "ipa": "ˈwɜːrkɪŋ",
+                "cue": "WER-king (with a soft 'r' sound at the start)"
+            }
+        ],
+        "reply": "That's wonderful! Three years is a solid tenure. What aspect of the job brings you the most joy?",
+        "follow_up_question": "What's your favorite project you've worked on here?"
+    }
+
+    example_section = dedent(
+        f"""
+        Example Input:
+        "{example_input}"
+
+        Example Output (valid JSON):
+        {json.dumps(example_output, ensure_ascii=False, indent=2)}
+        """
+    ).strip()
+
     schema = dedent(
         """
-        JSON Schema (exact keys):
+        JSON Schema (exact keys required):
         {
-          "corrected_natural": "string",
-          "corrected_literal": "string",
+          "corrected_natural": "string (how it sounds naturally)",
+          "corrected_literal": "string (word-for-word correction)",
           "mistakes": [{"frm": "string", "to": "string", "why": "string"}],
-          "pronunciation": [{"word": "string", "ipa": "string", "cue": "string"}],
+          "pronunciation": [{"word": "string", "ipa": "string (IPA notation)", "cue": "string (intuitive cue)"}],
           "reply": "string (empty if mode is 'correct')",
-          "follow_up_question": "string"
+          "follow_up_question": "string (empty if mode is 'correct')"
         }
         """
     ).strip()
 
-    return f"{base}\n\n{mode_block}\n\n{schema}"
+    return f"{base}\n\n{mode_block}\n\n{example_section}\n\n{schema}"
 
 
 def _build_user_prompt(text: str) -> str:
@@ -149,14 +198,28 @@ def _build_user_prompt(text: str) -> str:
 
 
 def _safe_parse_json(raw: str) -> TeachOut:
+    """
+    Robustly parse JSON from LLM output.
+    Handles:
+    - Markdown code fences (```json ... ```)
+    - Extra whitespace and preambles
+    - Missing or null fields (Pydantic defaults handle this)
+    """
     cleaned = strip_fences_and_quotes(raw).strip()
+
+    # Try to extract JSON block if model ignored instructions and added markdown
+    json_match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if json_match:
+        cleaned = json_match.group(0)
+
     try:
-        obj = json.loads(cleaned)
-        if not isinstance(obj, dict):
+        data = json.loads(cleaned)
+        if not isinstance(data, dict):
             raise ValueError("JSON root is not an object")
-        return obj  # type: ignore[return-value]
-    except Exception:
-        # Preserve raw output for debugging; do not throw for API robustness.
+        # Pydantic validates and coerces; provides defaults for missing fields
+        return TeachOut(**data)
+    except Exception as e:
+        # Preserve raw output for debugging; return degraded response
         return TeachOut(
             corrected_natural="",
             corrected_literal="",
@@ -175,12 +238,12 @@ def _safe_parse_json(raw: str) -> TeachOut:
 
 def teach(text: str, mode: str = DEFAULT_MODE, cfg: Optional[TeachCfg] = None) -> TeachOut:
     """
-    Core function for FastAPI usage.
+    Core function for FastAPI and CLI usage.
 
     Args:
         text: user utterance(s). You will likely pass combined transcripts.
         mode: coach|strict|correct
-        cfg: optional configuration overrides (model/ctx/timeout).
+        cfg: optional configuration overrides (model/ctx/timeout/temperature/top_p).
     """
     if cfg is None:
         cfg = TeachCfg(mode=mode)
@@ -197,59 +260,70 @@ def teach(text: str, mode: str = DEFAULT_MODE, cfg: Optional[TeachCfg] = None) -
         model=cfg.model,
         num_ctx=cfg.num_ctx,
         timeout=cfg.timeout,
+        temperature=cfg.temperature,
+        top_p=cfg.top_p,
     )
     return _safe_parse_json(raw)
 
 
 # -----------------------------------------------------------------------------
-# CLI formatting
+# CLI formatting with rich colors
 # -----------------------------------------------------------------------------
 
 def _format_cli(out: TeachOut) -> str:
-    if out.get("raw_error"):
+    """
+    Format TeachOut for CLI display with rich-compatible color codes.
+    Uses ANSI colors that work in most terminals.
+    """
+    if out.raw_error:
         return (
-            "Error: model did not return valid JSON.\n\nRaw output:\n"
-            + (out.get("raw_output") or out.get("reply") or "")
+            "\033[91m✗ Error: model did not return valid JSON.\n\033[0m\n"
+            "Raw output:\n"
+            + (out.raw_output or out.reply or "")
         )
 
     lines: List[str] = []
-    lines.append(f"Corrected (natural): {out.get('corrected_natural', '').strip()}")
-    lines.append(f"Corrected (literal):  {out.get('corrected_literal', '').strip()}")
 
-    mistakes = out.get("mistakes") or []
+    # Header colors: 94=blue, 92=green, 91=red, 93=yellow
+    lines.append(f"\033[94m► Corrected (natural):\033[0m {out.corrected_natural.strip()}")
+    lines.append(f"\033[94m► Corrected (literal):\033[0m  {out.corrected_literal.strip()}")
+
+    mistakes = out.mistakes or []
     if mistakes:
         lines.append("")
-        lines.append("Mistakes:")
+        lines.append("\033[91m⚠ Mistakes:\033[0m")
         for m in mistakes:
-            frm = (m.get("frm") or "").strip()
-            to = (m.get("to") or "").strip()
-            why = (m.get("why") or "").strip()
-            lines.append(f"- {frm} -> {to} ({why})")
+            frm = (m.frm or "").strip()
+            to = (m.to or "").strip()
+            why = (m.why or "").strip()
+            lines.append(f"  \033[91m✗\033[0m {frm} → \033[92m{to}\033[0m")
+            lines.append(f"     \033[90m({why})\033[0m")
 
-    pron = out.get("pronunciation") or []
+    pron = out.pronunciation or []
     if pron:
         lines.append("")
-        lines.append("Pronunciation:")
+        lines.append("\033[93m🔊 Pronunciation:\033[0m")
         for p in pron:
-            word = (p.get("word") or "").strip()
-            ipa = (p.get("ipa") or "").strip()
-            cue = (p.get("cue") or "").strip()
+            word = (p.word or "").strip()
+            ipa = (p.ipa or "").strip()
+            cue = (p.cue or "").strip()
             ipa_part = f"/{ipa}/" if ipa else ""
-            lines.append(f"- {word} {ipa_part} — {cue}".strip())
+            lines.append(f"  {word} \033[90m{ipa_part}\033[0m")
+            lines.append(f"     → {cue}")
 
-    reply = (out.get("reply") or "").strip()
+    reply = (out.reply or "").strip()
     if reply:
         lines.append("")
-        lines.append("Reply:")
-        lines.append(reply)
+        lines.append("\033[92m💬 Reply:\033[0m")
+        lines.append(f"  {reply}")
 
-    q = (out.get("follow_up_question") or "").strip()
+    q = (out.follow_up_question or "").strip()
     if q:
         lines.append("")
-        lines.append("Follow-up question:")
-        lines.append(q)
+        lines.append("\033[92m❓ Follow-up:\033[0m")
+        lines.append(f"  {q}")
 
-    return "\n".join(lines).strip() + "\n"
+    return "\n".join(lines).strip() + "\n\033[0m"
 
 
 def _print_help() -> None:

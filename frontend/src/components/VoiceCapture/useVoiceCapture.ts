@@ -70,6 +70,7 @@ export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const dataRef = useRef<Float32Array<ArrayBuffer> | null>(null);
+  const sawVoiceRef = useRef(false);
 
   const lastVoiceAtRef = useRef<number>(0);
   const rafRef = useRef<number | null>(null);
@@ -165,6 +166,7 @@ export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
     if (!streamRef.current) return;
 
     chunksRef.current = [];
+    sawVoiceRef.current = false;
 
     let recorder: MediaRecorder;
     try {
@@ -194,6 +196,13 @@ export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
       if (blob.size < 4096) {
         console.log(`Skipping tiny blob: ${blob.size} bytes`);
         if (isListeningRef.current) startNewRecorder();
+        return;
+      }
+
+      if (!sawVoiceRef.current) {
+        console.log("Skipping upload: no speech detected in this chunk");
+        if (isListeningRef.current) startNewRecorder();
+        else setStatus("Idle (no speech detected)");
         return;
       }
 
@@ -241,7 +250,10 @@ export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
     const rms = Math.sqrt(sum / data.length);
 
     const now = performance.now();
-    if (rms >= threshold) lastVoiceAtRef.current = now;
+    if (rms >= threshold) {
+      lastVoiceAtRef.current = now;
+      sawVoiceRef.current = true;
+    }
 
     const lastVoiceAt = lastVoiceAtRef.current;
     if (lastVoiceAt > 0 && now - lastVoiceAt > silenceMs) {

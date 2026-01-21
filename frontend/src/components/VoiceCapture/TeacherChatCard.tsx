@@ -1,10 +1,13 @@
 import { useEffect, useRef } from "react";
-import type { ChatMsg } from "./useTeacherChat";
+import type { ChatMsg, TeacherMode } from "./useTeacherChat";
 import { Card } from "./ui";
+import { ModeIndicator } from "./ModeIndicator";
 
 export function TeacherChatCard(props: {
   messages: ChatMsg[];
   aiTyping: boolean;
+  currentMode: TeacherMode;
+  onModeSettingsClick: () => void;
   onClear(): void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -20,12 +23,18 @@ export function TeacherChatCard(props: {
     <Card
       title="Session"
       right={
-        <button
-          onClick={props.onClear}
-          className="rounded-lg border border-zinc-200 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
-        >
-          Clear
-        </button>
+        <div className="flex items-center gap-2">
+          <ModeIndicator
+            currentMode={props.currentMode}
+            onClick={props.onModeSettingsClick}
+          />
+          <button
+            onClick={props.onClear}
+            className="rounded-lg border border-zinc-200 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
+          >
+            Clear
+          </button>
+        </div>
       }
     >
       <div

@@ -22,6 +22,7 @@ from .schemas import (
     ChatSaveIn, ChatOut,
     TeacherReplyOut,
     TranscriptCreateOut, TranscriptOut,
+    TeacherModeInfo,
 )
 from sqlalchemy import select
 from pydantic import BaseModel
@@ -109,6 +110,25 @@ async def health_check():
     return HealthOut(ollama_status=status, ollama_url=OLLAMA_URL)
 
 
+@app.get("/api/english/modes", response_model=list[TeacherModeInfo])
+async def get_teacher_modes():
+    """Get available English teacher modes with descriptions"""
+    return [
+        TeacherModeInfo(
+            name="coach",
+            description="Continue the conversation naturally. Keep it friendly, practical, and engage with follow-up questions."
+        ),
+        TeacherModeInfo(
+            name="strict",
+            description="Be thorough and include all mistakes. Provide IPA pronunciation for any word that might be mispronounced."
+        ),
+        TeacherModeInfo(
+            name="correct",
+            description="Show corrections only—no conversation or follow-up questions. Best for quick grammar fixes."
+        ),
+    ]
+
+
 
 @app.post("/api/voice/transcribe", response_model=TranscriptCreateOut)
 async def transcribe_voice(
@@ -141,6 +161,15 @@ async def transcribe_voice(
         to_wav_16k_mono(src_tmp_path, wav_tmp_path)
 
         raw_text, literal_text, meta = transcribe_file(wav_tmp_path)
+
+        # Skip storing empty transcriptions
+        if not (raw_text or literal_text) or (
+            not raw_text.strip() and not literal_text.strip()
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Empty transcription (no speech detected)",
+            )
 
     except subprocess.CalledProcessError as e:
         detail = (getattr(e, "stderr", "") or "").strip() or str(e)
@@ -218,17 +247,26 @@ async def english_teach(payload: TeachIn, db: AsyncSession = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"english-teacher failed: {type(e).__name__}: {e}")
 
+    # `teach()` returns a Pydantic model from `scripts.english_teacher`.
+    # Convert it to a plain mapping for DB persistence + FastAPI response schema.
+    if hasattr(out, "model_dump"):
+        out_data = out.model_dump()  # pydantic v2
+    elif hasattr(out, "dict"):
+        out_data = out.dict()  # pydantic v1
+    else:
+        out_data = out
+
     # Persist teacher reply
     row = TeacherReply(
         chat_key=chat_key,
         mode=mode,
         input_text=text,
-        output=dict(out),
+        output=out_data,
     )
     db.add(row)
     await db.commit()
 
-    return TeachOut(**out)
+    return TeachOut(**out_data)
 
 @app.get("/api/english/history", response_model=list[TeacherReplyOut])
 async def english_history(limit: int = 50, db: AsyncSession = Depends(get_db)):

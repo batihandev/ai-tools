@@ -26,9 +26,20 @@ def ollama_chat(
     num_ctx: int = 4096,
     timeout: int = 60,
     model: Optional[str] = None,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
 ) -> str:
     """
     Core Ollama chat helper for local tools.
+
+    Args:
+        system_prompt: System context/instructions
+        user_prompt: User query
+        num_ctx: Context window size
+        timeout: Request timeout in seconds
+        model: Model name (uses default if not provided)
+        temperature: Sampling temperature (0.0-1.0, lower = more deterministic)
+        top_p: Nucleus sampling parameter (0.0-1.0)
 
     Returns:
       raw content string from the model (no extra cleanup).
@@ -45,6 +56,12 @@ def ollama_chat(
         ],
         "stream": False,
     }
+
+    # Add optional sampling parameters if provided
+    if temperature is not None:
+        payload["temperature"] = temperature
+    if top_p is not None:
+        payload["top_p"] = top_p
 
     resp = requests.post(
         f"{base_url}/api/chat",

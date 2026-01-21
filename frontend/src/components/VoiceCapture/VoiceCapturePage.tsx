@@ -1,11 +1,14 @@
+import { useState } from "react";
 import { CaptureCard } from "./CaptureCard";
 import { HistoryCard } from "./HistoryCard";
 import { LatestTranscriptCard } from "./LatestTranscriptCard";
 import { TeacherChatCard } from "./TeacherChatCard";
+import { ModeSettingsModal } from "./ModeSettingsModal";
 import { useTeacherChat } from "./useTeacherChat";
 import { useVoiceCapture } from "./useVoiceCapture";
 
 export function VoiceCapturePage() {
+  const [modeModalOpen, setModeModalOpen] = useState(false);
   const teacher = useTeacherChat();
 
   const vc = useVoiceCapture({
@@ -33,10 +36,15 @@ export function VoiceCapturePage() {
         <TeacherChatCard
           messages={teacher.messages}
           aiTyping={teacher.aiTyping}
+          currentMode={teacher.mode}
+          onModeSettingsClick={() => setModeModalOpen(true)}
           onClear={teacher.clear}
         />
 
-        <LatestTranscriptCard latest={vc.latest} />
+        <LatestTranscriptCard
+          latest={vc.latest}
+          onRetry={(text) => teacher.onTranscript(text)}
+        />
 
         <CaptureCard
           isListening={vc.isListening}
@@ -57,6 +65,13 @@ export function VoiceCapturePage() {
 
         <HistoryCard history={vc.history} />
       </div>
+
+      <ModeSettingsModal
+        isOpen={modeModalOpen}
+        currentMode={teacher.mode}
+        onModeChange={(newMode) => teacher.setMode(newMode)}
+        onClose={() => setModeModalOpen(false)}
+      />
     </div>
   );
 }
