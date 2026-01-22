@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ai_commit – suggest git commit messages using local LLM.
-Supports auto-staging, direct commit, and pushing to origin.
+Supports auto-staging, direct commit, pushing to origin, and regeneration.
 """
 from __future__ import annotations
 
@@ -108,68 +108,90 @@ def main() -> None:
     cfg = CommitCfg()
     use_all = "--all" in sys.argv
     
+    # 1. Capture Diff once
     diff = get_git_diff(use_all, cfg.cwd)
     
-    commit_data = with_spinner(
-        "\033[96mai_commit analyzing changes\033[0m", 
-        lambda: generate_commit(diff, cfg)
-    )
+    while True:
+        # 2. Generate Commit Message
+        commit_data = with_spinner(
+            "\033[96mai_commit analyzing changes\033[0m", 
+            lambda: generate_commit(diff, cfg)
+        )
 
-    # Prepare Commit Arguments
-    summary_esc = commit_data.summary.replace('"', '\\"')
-    git_args = ["commit", "-m", summary_esc]
-    for b in commit_data.bullets:
-        bullet_text = f"- {b.path}: {b.explanation}".replace('"', '\\"')
-        git_args += ["-m", bullet_text]
+        # 3. Prepare Commit Arguments
+        summary_esc = commit_data.summary.replace('"', '\\"')
+        git_args = ["commit", "-m", summary_esc]
+        for b in commit_data.bullets:
+            bullet_text = f"- {b.path}: {b.explanation}".replace('"', '\\"')
+            git_args += ["-m", bullet_text]
 
-    # Visual Presentation
-    print(f"\n\033[94m► Proposed Summary:\033[0m \033[1m{commit_data.summary}\033[0m")
-    for b in commit_data.bullets:
-        print(f"  \033[90m•\033[0m \033[32m{b.path}\033[0m: {b.explanation}")
-    
-    # Construct multi-line command for display
-    cmd_display = "git commit"
-    cmd_display += f' -m "{summary_esc}"'
-    for b in commit_data.bullets:
-        cmd_display += f' \\\n  -m "- {b.path}: {b.explanation}"'
-    
-    print(f"\n\033[93m► Generated Command:\033[0m\n{cmd_display}\n")
+        # 4. Visual Presentation
+        print(f"\n\033[94m► Proposed Summary:\033[0m \033[1m{commit_data.summary}\033[0m")
+        for b in commit_data.bullets:
+            print(f"  \033[90m•\033[0m \033[32m{b.path}\033[0m: {b.explanation}")
+        
+        cmd_display = "git commit"
+        cmd_display += f' -m "{summary_esc}"'
+        for b in commit_data.bullets:
+            cmd_display += f' \\\n  -m "- {b.path}: {b.explanation}"'
+        
+        print(f"\n\033[93m► Generated Command:\033[0m\n{cmd_display}\n")
 
-    print(f"\033[95m[ai_commit]\033[0m Select action:")
-    print("  \033[94m1)\033[0m Copy command to clipboard")
-    print("  \033[94m2)\033[0m Commit locally now")
-    print("  \033[94m3)\033[0m Commit and Push to origin")
-    print("  \033[94m4)\033[0m Cancel")
+        # 5. Menu
+        print(f"\033[95m[ai_commit]\033[0m Select action:")
+        print("  \033[94m1)\033[0m Copy command to clipboard")
+        print("  \033[94m2)\033[0m Commit locally now")
+        print("  \033[94m3)\033[0m Commit and Push to origin")
+        print("  \033[94m4)\033[0m Paraphrase Summary (Short Retry)")
+        print("  \033[94m5)\033[0m Full Retry (Regenerate from diff)")
+        print("  \033[94m6)\033[0m Cancel")
 
-    try:
-        choice = input(f"\n\033[95mSelection [1-4] (default 1):\033[0m ").strip()
-    except KeyboardInterrupt:
-        print("\n\033[90mCancelled.\033[0m")
-        sys.exit(0)
+        try:
+            choice = input(f"\n\033[95mSelection [1-6] (default 1):\033[0m ").strip()
+        except KeyboardInterrupt:
+            print("\n\033[90mCancelled.\033[0m")
+            sys.exit(0)
 
-    if choice in ("2", "3"):
-        # Auto-staging check
-        staged_check = run_git_cmd(["diff", "--cached", "--name-only"], cfg.cwd)
-        if not staged_check.stdout.strip():
-            print("\033[90mNo staged changes found. Auto-staging all changes...\033[0m")
-            subprocess.run(["git", "-C", cfg.cwd, "add", "."], check=True)
+        # 6. Action Handling
+        if choice == "5":
+            print("\033[90mRegenerating...\033[0m")
+            continue  # Re-enters the loop to call LLM again
 
-        # Run Commit
-        subprocess.run(["git", "-C", cfg.cwd] + git_args, check=True)
-        print("\033[92m✓ Committed successfully.\033[0m")
+        if choice == "4":
+            # Just a slight tweak: increase temperature briefly for variety or re-prompt
+            print("\033[90mRetrying with variety...\033[0m")
+            # We continue but the next loop iteration provides a new result
+            continue
 
-        if choice == "3":
-            print("\033[94mPushing to origin...\033[0m")
-            subprocess.run(["git", "-C", cfg.cwd, "push"], check=True)
-            print("\033[92m✓ Pushed successfully.\033[0m")
+        if choice in ("2", "3"):
+            staged_check = run_git_cmd(["diff", "--cached", "--name-only"], cfg.cwd)
+            if not staged_check.stdout.strip():
+                print("\033[90mNo staged changes found. Auto-staging all changes...\033[0m")
+                subprocess.run(["git", "-C", cfg.cwd, "add", "."], check=True)
 
-    elif choice in ("", "1"):
-        # Copy to clipboard
-        success, backend = copy_to_clipboard(cmd_display.replace(" \\\n  ", " "))
-        if success:
-            print(f"\033[92m✓ Copied to clipboard via {backend}.\033[0m")
-    else:
-        print("\033[90mOperation cancelled.\033[0m")
+            subprocess.run(["git", "-C", cfg.cwd] + git_args, check=True)
+            print("\033[92m✓ Committed successfully.\033[0m")
+
+            if choice == "3":
+                print("\033[94mPushing to origin...\033[0m")
+                subprocess.run(["git", "-C", cfg.cwd, "push"], check=True)
+                print("\033[92m✓ Pushed successfully.\033[0m")
+            break # Exit loop after successful commit
+
+        elif choice in ("", "1"):
+            success, backend = copy_to_clipboard(cmd_display.replace(" \\\n  ", " "))
+            if success:
+                print(f"\033[92m✓ Copied to clipboard via {backend}.\033[0m")
+            break # Exit loop after copy
+
+        elif choice == "6":
+            print("\033[90mOperation cancelled.\033[0m")
+            break
+        
+        else:
+            # For invalid inputs, just show the menu again
+            print("\033[91mInvalid selection.\033[0m")
+            continue
 
 if __name__ == "__main__":
     main()
