@@ -8,11 +8,10 @@ from __future__ import annotations
 import os
 import sys
 import subprocess
-import json
 import re
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import List, Optional
+from typing import List
 
 from pydantic import BaseModel, Field, AliasChoices
 
@@ -35,7 +34,7 @@ class CommitFile(BaseModel):
 class CommitData(BaseModel):
     summary: str = Field(
         validation_alias=AliasChoices("summary", "title", "header", "headline"),
-        description="A short imperative summary line"
+        description="A short imperative summary line",
     )
     bullets: List[CommitFile] = Field(default_factory=list)
 
@@ -51,12 +50,41 @@ class CommitCfg:
 # Git Helpers
 # -----------------------------------------------------------------------------
 
-def run_git_cmd(args: list[str], cwd: str):
+def run_git_cmd(args: list[str], cwd: str) -> subprocess.CompletedProcess[str]:
     """Executes a git command and returns the completed process object."""
     return subprocess.run(
         ["git", "-C", cwd] + args,
         capture_output=True,
-        text=True
+        text=True,
+    )
+
+def git_stdout(args: list[str], cwd: str) -> str:
+    res = run_git_cmd(args, cwd)
+    return (res.stdout or "").strip()
+
+def current_branch(cwd: str) -> str:
+    name = git_stdout(["rev-parse", "--abbrev-ref", "HEAD"], cwd)
+    if not name or name == "HEAD":
+        raise RuntimeError("Not on a branch (detached HEAD). Cannot set upstream.")
+    return name
+
+def has_upstream(cwd: str) -> bool:
+    # exits non-zero if no upstream is configured
+    res = run_git_cmd(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd)
+    return res.returncode == 0
+
+def push_with_upstream_if_needed(cwd: str) -> None:
+    """
+    Pushes to origin. If the current branch has no upstream, sets it to origin/<branch>.
+    """
+    if has_upstream(cwd):
+        subprocess.run(["git", "-C", cwd, "push"], check=True)
+        return
+
+    branch = current_branch(cwd)
+    subprocess.run(
+        ["git", "-C", cwd, "push", "--set-upstream", "origin", branch],
+        check=True,
     )
 
 def get_git_diff(use_all: bool, cwd: str) -> str:
@@ -67,7 +95,7 @@ def get_git_diff(use_all: bool, cwd: str) -> str:
         res = run_git_cmd(["diff", "--cached"], cwd)
         if not res.stdout.strip():
             res = run_git_cmd(["diff"], cwd)
-    
+
     if not res.stdout.strip():
         print(f"\n\033[91m✗ No changes detected in: {cwd}\033[0m")
         sys.exit(0)
@@ -79,25 +107,25 @@ def get_git_diff(use_all: bool, cwd: str) -> str:
 
 def generate_commit(diff: str, cfg: CommitCfg) -> CommitData:
     system = dedent("""
-        You write git commits in JSON. 
+        You write git commits in JSON.
         Keys: "summary" (string, <72 chars), "bullets" (list of {path, explanation}).
         Focus on 'what' and 'why'. Return ONLY JSON.
     """).strip()
-    
+
     raw = ollama_chat(
         system_prompt=system,
         user_prompt=f"Generate commit for this diff:\n{diff}",
         model=cfg.model,
         num_ctx=cfg.num_ctx,
         timeout=cfg.timeout,
-        temperature=cfg.temperature
+        temperature=cfg.temperature,
     )
-    
+
     cleaned = strip_fences_and_quotes(raw).strip()
     match = re.search(r"\{.*\}", cleaned, re.DOTALL)
     if not match:
         raise ValueError(f"No JSON found in LLM output: {cleaned}")
-        
+
     return CommitData.model_validate_json(match.group(0))
 
 # -----------------------------------------------------------------------------
@@ -107,15 +135,15 @@ def generate_commit(diff: str, cfg: CommitCfg) -> CommitData:
 def main() -> None:
     cfg = CommitCfg()
     use_all = "--all" in sys.argv
-    
+
     # 1. Capture Diff once
     diff = get_git_diff(use_all, cfg.cwd)
-    
+
     while True:
         # 2. Generate Commit Message
         commit_data = with_spinner(
-            "\033[96mai_commit analyzing changes\033[0m", 
-            lambda: generate_commit(diff, cfg)
+            "\033[96mai_commit analyzing changes\033[0m",
+            lambda: generate_commit(diff, cfg),
         )
 
         # 3. Prepare Commit Arguments
@@ -129,12 +157,12 @@ def main() -> None:
         print(f"\n\033[94m► Proposed Summary:\033[0m \033[1m{commit_data.summary}\033[0m")
         for b in commit_data.bullets:
             print(f"  \033[90m•\033[0m \033[32m{b.path}\033[0m: {b.explanation}")
-        
+
         cmd_display = "git commit"
         cmd_display += f' -m "{summary_esc}"'
         for b in commit_data.bullets:
             cmd_display += f' \\\n  -m "- {b.path}: {b.explanation}"'
-        
+
         print(f"\n\033[93m► Generated Command:\033[0m\n{cmd_display}\n")
 
         # 5. Menu
@@ -158,9 +186,8 @@ def main() -> None:
             continue  # Re-enters the loop to call LLM again
 
         if choice == "4":
-            # Just a slight tweak: increase temperature briefly for variety or re-prompt
+            # Slight tweak: you currently just re-run; kept as-is.
             print("\033[90mRetrying with variety...\033[0m")
-            # We continue but the next loop iteration provides a new result
             continue
 
         if choice in ("2", "3"):
@@ -174,22 +201,21 @@ def main() -> None:
 
             if choice == "3":
                 print("\033[94mPushing to origin...\033[0m")
-                subprocess.run(["git", "-C", cfg.cwd, "push"], check=True)
+                push_with_upstream_if_needed(cfg.cwd)
                 print("\033[92m✓ Pushed successfully.\033[0m")
-            break # Exit loop after successful commit
+            break  # Exit loop after successful commit
 
         elif choice in ("", "1"):
             success, backend = copy_to_clipboard(cmd_display.replace(" \\\n  ", " "))
             if success:
                 print(f"\033[92m✓ Copied to clipboard via {backend}.\033[0m")
-            break # Exit loop after copy
+            break  # Exit loop after copy
 
         elif choice == "6":
             print("\033[90mOperation cancelled.\033[0m")
             break
-        
+
         else:
-            # For invalid inputs, just show the menu again
             print("\033[91mInvalid selection.\033[0m")
             continue
 
