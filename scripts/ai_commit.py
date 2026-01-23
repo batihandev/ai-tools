@@ -11,13 +11,13 @@ import subprocess
 import re
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel, Field, AliasChoices
 
 # Relative imports
 from .helper.env import load_repo_dotenv
-from .helper.llm import ollama_chat, resolve_model
+from .helper.llm import ollama_chat
 from .helper.spinner import with_spinner
 from .helper.clipboard import copy_to_clipboard
 from .helper.colors import Colors
@@ -51,7 +51,7 @@ class CommitData(BaseModel):
 
 @dataclass(frozen=True)
 class CommitCfg:
-    model: str = resolve_model("AI_COMMIT_MODEL")
+    model: Optional[str] = os.getenv("AI_COMMIT_MODEL")
     num_ctx: int = 8192
     timeout: int = 120
     temperature: float = 0.2

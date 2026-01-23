@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 # IMPORTANT: relative imports (works when imported as scripts.english_teacher)
 from .helper.env import load_repo_dotenv
-from .helper.llm import ollama_chat, resolve_model
+from .helper.llm import ollama_chat
 from .helper.spinner import with_spinner
 from .helper.colors import Colors
 from .helper.json_utils import safe_parse_model
@@ -24,7 +24,7 @@ load_repo_dotenv()
 # Config
 # -----------------------------------------------------------------------------
 
-DEFAULT_MODEL = resolve_model("ENGLISH_TEACHER_MODEL")
+DEFAULT_MODEL = os.getenv("ENGLISH_TEACHER_MODEL")
 DEFAULT_NUM_CTX = int(os.getenv("ENGLISH_TEACHER_NUM_CTX", "4096"))
 DEFAULT_TIMEOUT = int(os.getenv("ENGLISH_TEACHER_TIMEOUT", "60"))
 DEFAULT_MODE = os.getenv("ENGLISH_TEACHER_MODE", "coach")  # coach|strict|correct
@@ -63,7 +63,7 @@ class TeachOut(BaseModel):
 
 @dataclass(frozen=True)
 class TeachCfg:
-    model: str = DEFAULT_MODEL
+    model: Optional[str] = DEFAULT_MODEL
     num_ctx: int = DEFAULT_NUM_CTX
     timeout: int = DEFAULT_TIMEOUT
     mode: str = DEFAULT_MODE

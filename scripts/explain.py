@@ -40,7 +40,7 @@ import subprocess
 from pathlib import Path
 from textwrap import dedent
 
-from .helper.llm import ollama_chat, resolve_model
+from .helper.llm import ollama_chat
 from .helper.json_utils import strip_json_fence
 from .helper.spinner import with_spinner
 from .helper.context import warn_if_approaching_context
@@ -639,7 +639,7 @@ def call_model(system_prompt: str, user_prompt: str, label: str) -> str:
         raw = ollama_chat(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            model=resolve_model("INVESTIGATE_MODEL"),
+            model=os.getenv("INVESTIGATE_MODEL"),
             num_ctx=16000,
             timeout=180,
         )
