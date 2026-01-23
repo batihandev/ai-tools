@@ -69,6 +69,9 @@ DEFAULT_MAX_CTX = 8192  # Cap auto-context to prevent OOM on typical GPUs
 # -----------------------------
 
 def get_default_vlm_model() -> str:
+    override = os.getenv("OVERRIDE_VLM_MODEL")
+    if override and override.strip():
+        return override.strip()
     return os.getenv("VLM_MODEL", "qwen2.5vl:3b")
 
 

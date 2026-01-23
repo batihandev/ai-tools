@@ -7,16 +7,26 @@ import requests
 from .ollama_utils import resolve_ollama_url
 
 
-def get_default_model() -> str:
+def resolve_model(specific_env: Optional[str] = None) -> str:
     """
-    Resolve the model name for local tools.
+    Resolve model with priority:
+      1) OVERRIDE_LLM_MODEL (global override)
+      2) specific_env (tool-specific preference)
+      4) fallback "llama3.1:8b"
+    """
+    # 1. Global Override
+    override = os.getenv("OVERRIDE_LLM_MODEL")
+    if override and override.strip():
+        return override.strip()
 
-    Priority:
-      1) AI_COMMIT_MODEL
-      2) INVESTIGATE_MODEL
-      3) fallback "llama3.1:8b"
-    """
-    return os.getenv("AI_COMMIT_MODEL", os.getenv("INVESTIGATE_MODEL", "llama3.1:8b"))
+    # 2. Tool Specific
+    if specific_env:
+        val = os.getenv(specific_env)
+        if val and val.strip():
+            return val.strip()
+
+    # 3. Fallback
+    return "llama3.1:8b"
 
 
 def ollama_chat(
@@ -45,7 +55,7 @@ def ollama_chat(
       raw content string from the model (no extra cleanup).
     """
     base_url = resolve_ollama_url("http://localhost:11434")
-    model_name = model or get_default_model()
+    model_name = model or resolve_model(None)
 
     options: dict = {"num_ctx": num_ctx}
     if temperature is not None:

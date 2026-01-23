@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, AliasChoices
 
 # Relative imports
 from .helper.env import load_repo_dotenv
-from .helper.llm import ollama_chat
+from .helper.llm import ollama_chat, resolve_model
 from .helper.spinner import with_spinner
 from .helper.clipboard import copy_to_clipboard
 from .helper.colors import Colors
@@ -51,7 +51,7 @@ class CommitData(BaseModel):
 
 @dataclass(frozen=True)
 class CommitCfg:
-    model: str = os.getenv("AI_COMMIT_MODEL", "llama3.1:8b")
+    model: str = resolve_model("AI_COMMIT_MODEL")
     num_ctx: int = 8192
     timeout: int = 120
     temperature: float = 0.2

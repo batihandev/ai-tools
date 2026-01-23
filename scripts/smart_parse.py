@@ -43,7 +43,7 @@ from pathlib import Path
 from datetime import datetime
 from textwrap import dedent
 
-from .helper.llm import ollama_chat
+from .helper.llm import ollama_chat, resolve_model
 from .helper.spinner import with_spinner
 from .helper.env import load_repo_dotenv
 from .helper.colors import Colors
@@ -212,7 +212,7 @@ def call_model(snippet: str) -> str:
     Ask the local model to minimally repair the snippet,
     but keep the same format. Shows a spinner while waiting.
     """
-    model = os.getenv("SMART_PARSE_MODEL", os.getenv("INVESTIGATE_MODEL", "llama3.1:8b"))
+    model = resolve_model("SMART_PARSE_MODEL")
 
     system_prompt = dedent(
         """
