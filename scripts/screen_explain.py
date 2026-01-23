@@ -24,23 +24,14 @@ USAGE
   # 6) Override model
   screen_explain --model qwen2.5vl:3b
   screen_explain 3 --model qwen2.5vl:3b
-  screen_explain /path/to/image.png --model qwen2.5vl:3b
-  screen_explain --model qwen2.5vl:3b
-  screen_explain 3 --model qwen2.5vl:3b
-  screen_explain /path/to/image.png --model qwen2.5vl:3b
 
   # 7) Override context window
   screen_explain --ctx 8192
-  screen_explain --ctx 20000 --model llama3.2-vision
+
 NOTES
   - Requires env var SCREENSHOT_DIR for default mode.
-  - Cache:
-      logs/vlm-cache/index.json maps "fast key" -> "content key"
-      logs/vlm-cache/<content-key>.json or .txt stores the actual result
-  - Mirror:
-      logs/vlm-mirror stores copies of inputs to avoid slow reads from /mnt/c (WSL/Windows FS).
-      Retention: last 20 files and <= 100 MB total (oldest pruned).
-  - Errors are NOT cached (only written to logs/screen_explain-last.json and stderr).
+  - Caches results to logs/vlm-cache/ to avoid re-running slow vision models.
+  - Mirrors images to logs/vlm-mirror/ for faster access from WSL/containers.
 """
 from __future__ import annotations
 
@@ -48,22 +39,28 @@ import hashlib
 import heapq
 import json
 import os
+import re
 import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
+
+from pydantic import BaseModel, Field
 
 from .helper.env import load_repo_dotenv
 from .helper.spinner import with_spinner
 from .helper.vlm import ollama_chat_with_images
 from .helper.colors import Colors
-from .helper.json_utils import try_parse_json, strip_json_fence
+from .helper.json_utils import safe_parse_model
 from .helper.utils import atomic_write_text
 
-
 load_repo_dotenv()
+
+# -----------------------------------------------------------------------------
+# Configuration & Constants
+# -----------------------------------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 LOG_DIR = BASE_DIR / "logs"
@@ -71,18 +68,17 @@ LOG_DIR.mkdir(exist_ok=True)
 
 CACHE_DIR = LOG_DIR / "vlm-cache"
 CACHE_DIR.mkdir(exist_ok=True)
-
-CACHE_INDEX = CACHE_DIR / "index.json"  # fast-key -> content-key
-LAST_JSON = LOG_DIR / "screen_explain-last.json"
+CACHE_INDEX = CACHE_DIR / "index.json"
 
 MIRROR_DIR = LOG_DIR / "vlm-mirror"
 MIRROR_DIR.mkdir(exist_ok=True)
 
-# Retention policy
-MIRROR_MAX_FILES = 20
-MIRROR_MAX_BYTES = 100 * 1024 * 1024  # 100 MB
+LAST_JSON = LOG_DIR / "screen_explain-last.json"
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+
+MIRROR_MAX_FILES = 20
+MIRROR_MAX_BYTES = 100 * 1024 * 1024  # 100 MB
 
 
 @dataclass(frozen=True)
@@ -94,6 +90,37 @@ class Args:
     quality: bool
     ctx: int | None
 
+
+# -----------------------------------------------------------------------------
+# Data Models (Pydantic)
+# -----------------------------------------------------------------------------
+
+class UIElement(BaseModel):
+    name: str
+    description: str
+    status: str = "visible"
+
+class Issue(BaseModel):
+    title: str
+    severity: str = "medium"  # low, medium, high, critical
+    description: str
+    recommendation: str
+
+class ScreenAnalysis(BaseModel):
+    summary: str = Field(..., description="High-level summary of what is visible on the screen.")
+    ui_elements: List[UIElement] = Field(default_factory=list, description="List of key UI components identified.")
+    detected_text: List[str] = Field(default_factory=list, description="Important text detected on screen.")
+    issues: List[Issue] = Field(default_factory=list, description="Potential errors, bugs, or anomalies found.")
+    next_checks: List[str] = Field(default_factory=list, description="Suggested next steps for the developer.")
+    
+    # Fallback fields for raw output if parsing partially fails
+    raw_output: str = ""
+    is_raw_error: bool = False
+
+
+# -----------------------------------------------------------------------------
+# Argument Parsing
+# -----------------------------------------------------------------------------
 
 def parse_args(argv: list[str]) -> Args:
     if any(a in ("-h", "--help", "help") for a in argv):
@@ -143,6 +170,10 @@ def parse_args(argv: list[str]) -> Args:
     return Args(target=target, count=count, model=model, force_new=force_new, quality=quality, ctx=ctx)
 
 
+# -----------------------------------------------------------------------------
+# File System & Mirroring
+# -----------------------------------------------------------------------------
+
 def screenshot_dir() -> Path:
     p = os.getenv("SCREENSHOT_DIR")
     if not p:
@@ -174,123 +205,20 @@ def pick_images(folder: Path, n: int) -> list[Path]:
     return [p for _mt, p in top]
 
 
-def build_prompt(n: int) -> str:
-    return (
-        dedent(
-            f"""
-        You are a precise screenshot/UI analyst for developers.
-
-        Rules:
-        - Describe what is visible on screen.
-        - Identify errors or anomalies.
-        - Suggest concrete next checks.
-        - Return STRICT JSON only.
-        - No markdown. No explanations.
-
-        Analyze {n} screenshot(s).
-
-        {{
-          "context": "...",
-          "detected_text": [],
-          "ui_elements": [],
-          "issues": [],
-          "hypotheses": [],
-          "next_checks": [],
-          "uncertainties": []
-        }}
-        """
-        )
-        .strip()
-    )
-
-
-def _sha256_bytes(data: bytes) -> str:
-    h = hashlib.sha256()
-    h.update(data)
-    return h.hexdigest()
-
-
-def _read_index() -> dict[str, str]:
-    try:
-        if CACHE_INDEX.exists():
-            obj = json.loads(CACHE_INDEX.read_text(encoding="utf-8"))
-            if isinstance(obj, dict):
-                return {str(k): str(v) for k, v in obj.items()}
-    except Exception as e:
-        print(f"{Colors.c('[screen_explain]')} {Colors.r(f'Error reading cache index: {e}')}", file=sys.stderr)
-    return {}
-
-
-def _write_index(idx: dict[str, str]) -> None:
-    atomic_write_text(CACHE_INDEX, json.dumps(idx, indent=2, ensure_ascii=False))
-
-
-def _fast_sig_for_file(p: Path) -> str:
-    st = p.stat()
-    return f"{p.name}|{st.st_size}|{st.st_mtime_ns}"
-
-
-def _fast_key(imgs: list[Path], prompt: str, model: str | None) -> str:
-    model_s = model or "default"
-    sigs = "\n".join(_fast_sig_for_file(p) for p in imgs)
-    material = f"model:{model_s}\nfiles:\n{sigs}\nprompt:{prompt}".encode("utf-8")
-    return _sha256_bytes(material)
-
-
-def _content_hash_images(imgs: list[Path]) -> str:
-    h = hashlib.sha256()
-    for p in imgs:
-        st = p.stat()
-        h.update(f"{p.name}|{st.st_size}|{st.st_mtime_ns}\n".encode("utf-8"))
-    return h.hexdigest()
-
-
-def _content_key(imgs: list[Path], prompt: str, model: str | None) -> str:
-    img_hash = _content_hash_images(imgs)
-    model_s = model or "default"
-    material = f"model:{model_s}\nimages:{img_hash}\nprompt:{prompt}".encode("utf-8")
-    return _sha256_bytes(material)
-
-
-def _cache_paths(content_key: str) -> tuple[Path, Path]:
-    return (CACHE_DIR / f"{content_key}.json", CACHE_DIR / f"{content_key}.txt")
-
-
-def _read_cached(ck: str) -> Optional[str]:
-    cache_json_path, cache_txt_path = _cache_paths(ck)
-    if cache_json_path.exists():
-        cached = json.loads(cache_json_path.read_text(encoding="utf-8"))
-        return json.dumps(cached, indent=2, ensure_ascii=False)
-    if cache_txt_path.exists():
-        return cache_txt_path.read_text(encoding="utf-8")
-    return None
-
-
-def _write_cache(ck: str, text: str, is_json: bool) -> None:
-    cache_json_path, cache_txt_path = _cache_paths(ck)
-    if is_json:
-        atomic_write_text(cache_json_path, text)
-    else:
-        atomic_write_text(cache_txt_path, text)
-
-
 def _mirror_name_for(src: Path, idx: int) -> str:
     st = src.stat()
     safe_stem = src.stem.replace(" ", "_")
     return f"{idx:02d}__{safe_stem}__{st.st_size}__{st.st_mtime_ns}{src.suffix.lower()}"
 
 
-def _mirror_paths_for(srcs: list[Path]) -> list[Path]:
-    return [MIRROR_DIR / _mirror_name_for(p, i) for i, p in enumerate(srcs)]
-
-
 def _ensure_mirrored(srcs: list[Path]) -> list[Path]:
-    dsts = _mirror_paths_for(srcs)
-    for src, dst in zip(srcs, dsts):
-        if dst.exists():
-            continue
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(src, dst)
+    dsts = []
+    for i, src in enumerate(srcs):
+        dst = MIRROR_DIR / _mirror_name_for(src, i)
+        dsts.append(dst)
+        if not dst.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dst)
     return dsts
 
 
@@ -299,145 +227,238 @@ def _prune_mirror_dir(max_files: int, max_bytes: int) -> None:
     total = 0
 
     for p in MIRROR_DIR.iterdir():
-        try:
-            if not p.is_file():
-                continue
+        if p.is_file():
             st = p.stat()
             files.append((p, st.st_size, st.st_mtime))
             total += st.st_size
-        except Exception as e:
-            print(f"{Colors.c('[screen_explain]')} {Colors.r(f'Error processing mirror file {p}: {e}')}", file=sys.stderr)
-
+    
     files.sort(key=lambda t: t[2])  # oldest first
 
-    def _delete_one(pp: Path, sz: int) -> None:
-        nonlocal total
-        try:
-            pp.unlink()
-            total -= sz
-        except Exception as e:
-            print(f"{Colors.c('[screen_explain]')} {Colors.r(f'Error deleting file {pp}: {e}')}", file=sys.stderr)
-
     while len(files) > max_files:
-        p, sz, _mt = files.pop(0)
-        _delete_one(p, sz)
-
-    # Size pruning
-    files = []
-    total = 0
-    for p in MIRROR_DIR.iterdir():
-        try:
-            if p.is_file():
-                st = p.stat()
-                files.append((p, st.st_size, st.st_mtime))
-                total += st.st_size
-        except Exception as e:
-            print(f"{Colors.c('[screen_explain]')} {Colors.r(f'Error processing mirror file {p}: {e}')}", file=sys.stderr)
-    files.sort(key=lambda t: t[2])
+        p, sz, _ = files.pop(0)
+        p.unlink(missing_ok=True)
+        total -= sz
 
     while total > max_bytes and files:
-        p, sz, _mt = files.pop(0)
-        _delete_one(p, sz)
+        p, sz, _ = files.pop(0)
+        p.unlink(missing_ok=True)
+        total -= sz
 
+
+# -----------------------------------------------------------------------------
+# Caching Logic
+# -----------------------------------------------------------------------------
+
+def _read_index() -> dict[str, str]:
+    if CACHE_INDEX.exists():
+        try:
+            val = json.loads(CACHE_INDEX.read_text(encoding="utf-8"))
+            if isinstance(val, dict):
+                return val
+        except Exception:
+            pass
+    return {}
+
+
+def _write_index(idx: dict[str, str]) -> None:
+    atomic_write_text(CACHE_INDEX, json.dumps(idx, indent=2))
+
+
+def _fast_key(imgs: list[Path], prompt: str, model_sig: str) -> str:
+    # Key based on filename + mtime + size (fast, no content read)
+    sig_parts = []
+    for p in imgs:
+        st = p.stat()
+        sig_parts.append(f"{p.name}|{st.st_size}|{st.st_mtime_ns}")
+    
+    material = f"model:{model_sig}\nfiles:{','.join(sig_parts)}\nprompt:{prompt}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _content_key(imgs: list[Path], prompt: str, model_sig: str) -> str:
+    # Key based on actual content hash (if needed) but here matching logic:
+    # We surely need to rely on the file stats being stable for local files.
+    # The 'mirror' logic already ensures unique names for content.
+    # So we can reuse the same logic or actually hash content if we want 100% safety.
+    # For speed, we will assume mirrored filenames (including size/mtime) are sufficient.
+    
+    # We will just hash the filenames in the mirror, which contain metadata.
+    return _fast_key(imgs, prompt, model_sig)
+
+
+def _cache_paths(ck: str) -> Tuple[Path, Path]:
+    return (CACHE_DIR / f"{ck}.json", CACHE_DIR / f"{ck}.txt")
+
+
+# -----------------------------------------------------------------------------
+# LLM & Prompting
+# -----------------------------------------------------------------------------
+
+def build_prompt(n: int) -> str:
+    return dedent(f"""
+        You are an expert UI/UX developer and QA engineer.
+        
+        Analyze the provided {n} screenshot(s).
+        
+        Your Goal:
+        1. Summarize what is shown.
+        2. Identify specific UI elements.
+        3. Detect any errors, visual glitches, or weird states.
+        4. Suggest what a developer should check next.
+
+        Constraint:
+        - Return ONLY valid JSON matching this schema:
+        
+        {{
+            "summary": "string",
+            "ui_elements": [
+                {{ "name": "string", "description": "string", "status": "visible|hidden|disabled" }}
+            ],
+            "detected_text": ["string"],
+            "issues": [
+                {{ "title": "string", "severity": "low|medium|high|critical", "description": "string", "recommendation": "string" }}
+            ],
+            "next_checks": ["string"]
+        }}
+    """).strip()
+
+
+def _make_fallback_analysis(raw: str) -> ScreenAnalysis:
+    """Create fallback ScreenAnalysis when parsing fails."""
+    return ScreenAnalysis(
+        summary="Raw output (parsing failed)",
+        raw_output=raw,
+        is_raw_error=True
+    )
+
+
+def _format_cli(analysis: ScreenAnalysis) -> str:
+    if analysis.is_raw_error:
+        return f"{Colors.r('✗ Failed to parse JSON response.')}\n\nRAW OUTPUT:\n{analysis.raw_output}"
+
+    out = []
+    
+    # Summary
+    out.append(f"\n{Colors.b('► Summary')}")
+    out.append(f"  {analysis.summary}")
+
+    # Issues (High Priority)
+    if analysis.issues:
+        out.append(f"\n{Colors.r('► detected Issues')}")
+        for err in analysis.issues:
+            sev_color = Colors.r if err.severity in ('high', 'critical') else Colors.y
+            out.append(f"  {sev_color('•')} {Colors.bold(err.title)} {Colors.grey(f'[{err.severity}]')}")
+            out.append(f"    {err.description}")
+            if err.recommendation:
+                out.append(f"    {Colors.g('→')} {Colors.grey('Suggest:')} {err.recommendation}")
+
+    # UI Elements (if verbose or interesting? Just listing them)
+    if analysis.ui_elements:
+        out.append(f"\n{Colors.c('► UI Elements')}")
+        for el in analysis.ui_elements:
+            out.append(f"  {Colors.c('•')} {Colors.bold(el.name)}: {el.description}")
+
+    # Next Checks
+    if analysis.next_checks:
+        out.append(f"\n{Colors.g('► Next Checks')}")
+        for check in analysis.next_checks:
+            out.append(f"  {Colors.g('✓')} {check}")
+
+    return "\n".join(out)
+
+
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
 
 def main() -> None:
     args = parse_args(sys.argv[1:])
     base = screenshot_dir()
 
-    if args.target is None:
-        src_imgs = pick_images(base, args.count or 1)
-    else:
+    # Select Images
+    if args.target:
         p = Path(args.target)
         if p.is_dir():
             src_imgs = pick_images(p, args.count or 5)
         else:
             src_imgs = [p]
+    else:
+        src_imgs = pick_images(base, args.count or 1)
 
     if not src_imgs:
         print(f"{Colors.c('[screen_explain]')} {Colors.r('No images found')}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"{Colors.c('[screen_explain]')} Using {Colors.g(str(len(src_imgs)))} image(s)")
+    print(f"{Colors.c('[screen_explain]')} Analyzing {Colors.g(str(len(src_imgs)))} image(s)...")
     for p in src_imgs:
-        print(f"{Colors.c('[screen_explain]')}   - {p}")
+        print(f"  {Colors.grey(str(p))}")
 
+    # Prepare logic
     prompt = build_prompt(len(src_imgs))
-
-    # -------------------------
-    # 1) FAST CACHE CHECK FIRST (no reads)
-    # -------------------------
-    # Prepare key material (include ctx if specific)
-    model_key_material = args.model
+    model_sig = args.model or "default"
     if args.ctx:
-        model_key_material = f"{model_key_material or 'default'}|ctx={args.ctx}"
+        model_sig += f"|ctx={args.ctx}"
 
+    # Index Check (Fast)
+    idx = _read_index()
+    fk = _fast_key(src_imgs, prompt, model_sig)
+    
     if not args.force_new:
-        idx = _read_index()
-        fk = _fast_key(src_imgs, prompt, model_key_material)
         ck = idx.get(fk)
         if ck:
-            cached_text = _read_cached(ck)
-            if cached_text is not None:
-                atomic_write_text(LAST_JSON, cached_text)
-                print(cached_text)
-                return
+            json_path, _ = _cache_paths(ck)
+            if json_path.exists():
+                try:
+                    cached_data = json.loads(json_path.read_text())
+                    # Validate against current schema
+                    analysis = ScreenAnalysis(**cached_data)
+                    print(_format_cli(analysis))
+                    return
+                except Exception:
+                    pass  # Cache invalid or schema changed
 
-    # -------------------------
-    # 2) Cache miss: mirror inputs (copy only if missing)
-    # -------------------------
+    # Mirror Images (IO)
     try:
-        imgs = _ensure_mirrored(src_imgs)
+        mirrored_imgs = _ensure_mirrored(src_imgs)
         _prune_mirror_dir(MIRROR_MAX_FILES, MIRROR_MAX_BYTES)
     except Exception as e:
-        print(f"{Colors.c('[screen_explain]')} {Colors.r(f'Error during mirroring: {e}')}", file=sys.stderr)
+        print(f"{Colors.r('Error mirroring images:')} {e}", file=sys.stderr)
         sys.exit(1)
 
-    # -------------------------
-    # 3) Content-key caching (fast now because mirrored)
-    # -------------------------
-    idx = _read_index()
-    fk = _fast_key(src_imgs, prompt, model_key_material)  # original files metadata
-    ck = _content_key(imgs, prompt, model_key_material)   # mirrored metadata signature
-    idx[fk] = ck
-    _write_index(idx)
-
-    if not args.force_new:
-        cached_text = _read_cached(ck)
-        if cached_text is not None:
-            atomic_write_text(LAST_JSON, cached_text)
-            print(cached_text)
-            return
-
-    def _call():
+    # Content Key
+    ck = _content_key(mirrored_imgs, prompt, model_sig)
+    
+    # Run Inference
+    def _run() -> str:
         return ollama_chat_with_images(
             user_prompt=prompt,
-            image_paths=imgs,
+            image_paths=mirrored_imgs,
             model=args.model,
             num_ctx=args.ctx,
             quality_mode=args.quality,
         )
 
     try:
-        result = with_spinner(Colors.c("screen_explain"), _call)
+        raw_res = with_spinner(Colors.c("screen_explain thinking..."), _run)
     except Exception as e:
-        err = f"{Colors.c('[screen_explain]')} {Colors.r(f'Error during analysis: {e}')}"
-        atomic_write_text(LAST_JSON, err)
-        print(err, file=sys.stderr)
+        print(f"\n{Colors.r('Analysis failed:')} {e}", file=sys.stderr)
         sys.exit(1)
 
-    parsed, raw = try_parse_json(result)
+    # Parse & Cache
+    analysis = safe_parse_model(raw_res, ScreenAnalysis, _make_fallback_analysis)
+    
+    # Save to cache
+    json_path, _ = _cache_paths(ck)
+    try:
+        atomic_write_text(json_path, analysis.model_dump_json())
+        idx[fk] = ck
+        _write_index(idx)
+        atomic_write_text(LAST_JSON, analysis.model_dump_json(indent=2))
+    except Exception as e:
+        print(f"{Colors.y('Warning: could not write cache:')} {e}", file=sys.stderr)
 
-    if parsed is not None:
-        out_text = json.dumps(parsed, indent=2, ensure_ascii=False)
-        _write_cache(ck, out_text, is_json=True)
-        atomic_write_text(LAST_JSON, out_text)
-        print(out_text)
-        return
-
-    raw_text = raw if raw is not None else str(result)
-    _write_cache(ck, raw_text, is_json=False)
-    atomic_write_text(LAST_JSON, raw_text)
-    print(raw_text)
+    # Display
+    print(_format_cli(analysis))
 
 
 if __name__ == "__main__":
