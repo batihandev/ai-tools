@@ -445,10 +445,20 @@ def ollama_chat_with_images(
             # Non-retriable: fail immediately.
             raise
 
+        def _log_to_file(content: str, filename: Path) -> None:
+            with open(filename, 'a') as f:
+                f.write(content + '\n')
+
+        # Example usage within a retry loop
         if out.strip() == "" or _looks_like_template_leak(out):
             last_err = RuntimeError(f"VLM returned unusable output: {_safe_preview(out, 200)!r}")
             ui.warn("[vlm] chat output unusable (empty/template). retrying with smaller resize scale ...")
+            
+            ui.err(f"[vlm] Full response: {out}")
+            _log_to_file(out, LOG_DIR / "unusable_outputs.log")
+            
             continue
+
 
         return out
 

@@ -46,8 +46,9 @@ import threading
 import time
 
 import requests
-from helper.ollama_utils import resolve_ollama_url
-from helper.env import load_repo_dotenv
+from .helper.ollama_utils import resolve_ollama_url
+from .helper.env import load_repo_dotenv
+from .helper.colors import Colors
 load_repo_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -141,7 +142,7 @@ def read_source() -> tuple[str, Path | None, Path | None]:
 
     if not argv:
         print(
-            "[smart_parse] Paste content, then press Ctrl+D.",
+            f"{Colors.c('[smart_parse]')} {Colors.m('Paste content, then press Ctrl+D.')}",
             file=sys.stderr,
         )
         data = sys.stdin.read()
@@ -159,7 +160,7 @@ def read_source() -> tuple[str, Path | None, Path | None]:
         # smart_parse out_path_or_dir  (input from stdin)
         out_arg = first
         print(
-            "[smart_parse] Paste content, then press Ctrl+D.",
+            f"{Colors.c('[smart_parse]')} {Colors.m('Paste content, then press Ctrl+D.')}",
             file=sys.stderr,
         )
         data = sys.stdin.read()
@@ -261,11 +262,11 @@ def call_model(snippet: str) -> str:
         symbols = "|/-\\"
         idx = 0
         while not stop_flag["stop"]:
-            sys.stderr.write("\r[smart_parse] processing " + symbols[idx % 4])
+            sys.stderr.write(f"\r{Colors.c('[smart_parse]')} processing " + symbols[idx % 4])
             sys.stderr.flush()
             idx += 1
             time.sleep(0.1)
-        sys.stderr.write("\r[smart_parse] processing done   \n")
+        sys.stderr.write(f"\r{Colors.c('[smart_parse]')} processing done   \n")
         sys.stderr.flush()
 
     thread = threading.Thread(target=spinner, daemon=True)
@@ -280,7 +281,7 @@ def call_model(snippet: str) -> str:
         resp.raise_for_status()
         return resp.json()["message"]["content"]
     except Exception as e:
-        print(f"[smart_parse] Error calling Ollama: {e}", file=sys.stderr)
+        print(f"{Colors.c('[smart_parse]')} {Colors.r(f'Error calling Ollama: {e}')}", file=sys.stderr)
         sys.exit(1)
     finally:
         stop_flag["stop"] = True
@@ -291,7 +292,7 @@ def main() -> None:
     raw, src_path, out_arg = read_source()
 
     if not raw.strip():
-        print("[smart_parse] No input detected.", file=sys.stderr)
+        print(f"{Colors.c('[smart_parse]')} {Colors.r('No input detected.')}", file=sys.stderr)
         sys.exit(1)
 
     fixed = call_model(raw)
@@ -300,9 +301,9 @@ def main() -> None:
     final_out.parent.mkdir(parents=True, exist_ok=True)
     final_out.write_text(fixed, encoding="utf-8")
 
-    print(f"-> wrote fixed content to {final_out}")
-    print("-> open parsed version in editor:")
-    print(f"   code {final_out}")
+    print(f"-> wrote fixed content to {Colors.g(str(final_out))}")
+    print(f"-> open parsed version in editor:")
+    print(f"   {Colors.b(f'code {final_out}')}")
 
 
 if __name__ == "__main__":

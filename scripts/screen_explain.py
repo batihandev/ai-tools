@@ -1,4 +1,3 @@
-# scripts/screen_explain.py
 #!/usr/bin/env python3
 """
 screen_explain — analyze recent screenshots with a local VLM (Ollama) and cache results.
@@ -54,6 +53,7 @@ from typing import Any, Optional, Tuple
 from .helper.env import load_repo_dotenv
 from .helper.spinner import with_spinner
 from .helper.vlm import ollama_chat_with_images
+from .helper.colors import Colors
 
 
 load_repo_dotenv()
@@ -124,7 +124,7 @@ def parse_args(argv: list[str]) -> Args:
         if count is None and a.isdigit():
             count = int(a)
             continue
-        print(f"[screen_explain] Unexpected arg: {a}", file=sys.stderr)
+        print(f"{Colors.c('[screen_explain]')} {Colors.r(f'Unexpected arg: {a}')}", file=sys.stderr)
         sys.exit(1)
 
     if target and target.isdigit() and count is None:
@@ -137,36 +137,27 @@ def parse_args(argv: list[str]) -> Args:
 def screenshot_dir() -> Path:
     p = os.getenv("SCREENSHOT_DIR")
     if not p:
-        print("[screen_explain] SCREENSHOT_DIR not set", file=sys.stderr)
+        print(f"{Colors.c('[screen_explain]')} {Colors.r('SCREENSHOT_DIR environment variable is not set.')}", file=sys.stderr)
         sys.exit(1)
     d = Path(p)
     if not d.exists():
-        print(f"[screen_explain] Not found: {d}", file=sys.stderr)
+        print(f"{Colors.c('[screen_explain]')} {Colors.r(f'Directory {d} does not exist.')}", file=sys.stderr)
         sys.exit(1)
     return d
 
 
 def pick_images(folder: Path, n: int) -> list[Path]:
-    """
-    Faster than building and sorting a full list.
-    Uses scandir + nlargest to avoid O(M log M) sorting for large folders.
-    """
     entries: list[tuple[int, Path]] = []
     try:
         with os.scandir(folder) as it:
             for e in it:
-                try:
-                    if not e.is_file():
-                        continue
-                    ext = Path(e.name).suffix.lower()
-                    if ext not in IMAGE_EXTS:
-                        continue
-                    st = e.stat()
-                    entries.append((st.st_mtime_ns, Path(e.path)))
-                except FileNotFoundError:
+                if not e.is_file():
                     continue
-                except PermissionError:
+                ext = Path(e.name).suffix.lower()
+                if ext not in IMAGE_EXTS:
                     continue
+                st = e.stat()
+                entries.append((st.st_mtime_ns, Path(e.path)))
     except FileNotFoundError:
         return []
 
@@ -257,8 +248,8 @@ def _read_index() -> dict[str, str]:
             obj = json.loads(CACHE_INDEX.read_text(encoding="utf-8"))
             if isinstance(obj, dict):
                 return {str(k): str(v) for k, v in obj.items()}
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"{Colors.c('[screen_explain]')} {Colors.r(f'Error reading cache index: {e}')}", file=sys.stderr)
     return {}
 
 
@@ -267,11 +258,6 @@ def _write_index(idx: dict[str, str]) -> None:
 
 
 def _fast_sig_for_file(p: Path) -> str:
-    """
-    IMPORTANT:
-    - Do not include absolute paths (WSL/Windows path forms differ).
-    - Use stable metadata: name + size + mtime_ns.
-    """
     st = p.stat()
     return f"{p.name}|{st.st_size}|{st.st_mtime_ns}"
 
@@ -284,11 +270,6 @@ def _fast_key(imgs: list[Path], prompt: str, model: str | None) -> str:
 
 
 def _content_hash_images(imgs: list[Path]) -> str:
-    """
-    Avoid reading image bytes for caching.
-    Since inputs are mirrored into a controlled folder and never mutated,
-    metadata signature is sufficient and much faster.
-    """
     h = hashlib.sha256()
     for p in imgs:
         st = p.stat()
@@ -341,7 +322,6 @@ def _ensure_mirrored(srcs: list[Path]) -> list[Path]:
         if dst.exists():
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
-        # copyfile is often faster than copy2; we don't need full metadata fidelity here
         shutil.copyfile(src, dst)
     return dsts
 
@@ -357,8 +337,8 @@ def _prune_mirror_dir(max_files: int, max_bytes: int) -> None:
             st = p.stat()
             files.append((p, st.st_size, st.st_mtime))
             total += st.st_size
-        except Exception:
-            continue
+        except Exception as e:
+            print(f"{Colors.c('[screen_explain]')} {Colors.r(f'Error processing mirror file {p}: {e}')}", file=sys.stderr)
 
     files.sort(key=lambda t: t[2])  # oldest first
 
@@ -367,8 +347,8 @@ def _prune_mirror_dir(max_files: int, max_bytes: int) -> None:
         try:
             pp.unlink()
             total -= sz
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"{Colors.c('[screen_explain]')} {Colors.r(f'Error deleting file {pp}: {e}')}", file=sys.stderr)
 
     while len(files) > max_files:
         p, sz, _mt = files.pop(0)
@@ -383,8 +363,8 @@ def _prune_mirror_dir(max_files: int, max_bytes: int) -> None:
                 st = p.stat()
                 files.append((p, st.st_size, st.st_mtime))
                 total += st.st_size
-        except Exception:
-            continue
+        except Exception as e:
+            print(f"{Colors.c('[screen_explain]')} {Colors.r(f'Error processing mirror file {p}: {e}')}", file=sys.stderr)
     files.sort(key=lambda t: t[2])
 
     while total > max_bytes and files:
@@ -406,12 +386,12 @@ def main() -> None:
             src_imgs = [p]
 
     if not src_imgs:
-        print("[screen_explain] No images found", file=sys.stderr)
+        print(f"{Colors.c('[screen_explain]')} {Colors.r('No images found')}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"[screen_explain] Using {len(src_imgs)} image(s)")
+    print(f"{Colors.c('[screen_explain]')} Using {Colors.g(str(len(src_imgs)))} image(s)")
     for p in src_imgs:
-        print(f"[screen_explain]   - {p}")
+        print(f"{Colors.c('[screen_explain]')}   - {p}")
 
     prompt = build_prompt(len(src_imgs))
 
@@ -436,7 +416,7 @@ def main() -> None:
         imgs = _ensure_mirrored(src_imgs)
         _prune_mirror_dir(MIRROR_MAX_FILES, MIRROR_MAX_BYTES)
     except Exception as e:
-        print(f"[screen_explain] Error: {e}", file=sys.stderr)
+        print(f"{Colors.c('[screen_explain]')} {Colors.r(f'Error during mirroring: {e}')}", file=sys.stderr)
         sys.exit(1)
 
     # -------------------------
@@ -464,10 +444,9 @@ def main() -> None:
         )
 
     try:
-        result = with_spinner("screen_explain", _call)
+        result = with_spinner(Colors.c("screen_explain"), _call)
     except Exception as e:
-        # Do NOT cache errors. Only write LAST_JSON and stderr.
-        err = f"[screen_explain] Error: {e}"
+        err = f"{Colors.c('[screen_explain]')} {Colors.r(f'Error during analysis: {e}')}"
         _atomic_write_text(LAST_JSON, err)
         print(err, file=sys.stderr)
         sys.exit(1)

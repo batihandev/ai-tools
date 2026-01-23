@@ -3,13 +3,14 @@ import os
 import sys
 import subprocess
 from pathlib import Path
-from helper.env import load_repo_dotenv
+from .helper.env import load_repo_dotenv
+from .helper.colors import Colors
 load_repo_dotenv()
 
 
 def main() -> None:
     if not sys.argv[1:]:
-        print("Usage: runi <command ...>", file=sys.stderr)
+        print(f"Usage: {Colors.bold('runi')} <command ...>", file=sys.stderr)
         sys.exit(1)
 
     base_dir = Path(__file__).resolve().parents[1]
@@ -25,7 +26,7 @@ def main() -> None:
     env.setdefault("PYTHONUNBUFFERED", "1")
 
     cmd = sys.argv[1:]
-    print(f"[runi] executing: {' '.join(cmd)}")
+    print(f"{Colors.c('[runi]')} executing: {' '.join(cmd)}")
 
     with log_path.open("w", encoding="utf-8", errors="ignore") as log_file:
         proc = subprocess.Popen(
@@ -67,7 +68,7 @@ def main() -> None:
     if code != 0:
         try:
             answer = input(
-                f"\n[runi] command exited with {code}. "
+                f"\n{Colors.c('[runi]')} command exited with {Colors.r(str(code))}. "
                 "Run investigate on this log? [y/N] "
             ).strip().lower()
         except EOFError:

@@ -4,10 +4,11 @@ import sys
 from pathlib import Path
 from textwrap import dedent
 
-from helper.llm import ollama_chat, strip_fences_and_quotes
-from helper.spinner import with_spinner
-from helper.context import warn_if_approaching_context
-from helper.env import load_repo_dotenv
+from .helper.llm import ollama_chat, strip_fences_and_quotes
+from .helper.spinner import with_spinner
+from .helper.context import warn_if_approaching_context
+from .helper.env import load_repo_dotenv
+from .helper.colors import Colors
 load_repo_dotenv()
 
 DEFAULT_LINES = 100
@@ -50,24 +51,24 @@ def parse_args(argv: list[str]) -> tuple[int, str, str | None]:
 
         if arg in ("-n", "--lines"):
             if i + 1 >= len(argv):
-                print("investigate: -n/--lines requires an integer value", file=sys.stderr)
+                print(f"{Colors.c('investigate')} {Colors.r('-n/--lines requires an integer value')}", file=sys.stderr)
                 sys.exit(1)
             try:
                 lines = int(argv[i + 1])
             except ValueError:
-                print("investigate: -n/--lines value must be an integer", file=sys.stderr)
+                print(f"{Colors.c('investigate')} {Colors.r('-n/--lines value must be an integer')}", file=sys.stderr)
                 sys.exit(1)
             i += 2
             continue
 
         if arg == "--mode":
             if i + 1 >= len(argv):
-                print("investigate: --mode requires a value", file=sys.stderr)
+                print(f"{Colors.c('investigate')} {Colors.r('--mode requires a value')}", file=sys.stderr)
                 sys.exit(1)
             mode_val = argv[i + 1]
             if mode_val not in ("debug", "summary", "blame"):
                 print(
-                    "investigate: --mode must be one of: debug, summary, blame",
+                    f"{Colors.c('investigate')} {Colors.r('--mode must be one of: debug, summary, blame')}",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -76,8 +77,8 @@ def parse_args(argv: list[str]) -> tuple[int, str, str | None]:
             continue
 
         if arg.startswith("-"):
-            print(f"investigate: unknown option: {arg}", file=sys.stderr)
-            print("Usage: investigate [-n LINES] [--mode debug|summary|blame] [LOG_FILE]", file=sys.stderr)
+            print(f"{Colors.c('investigate')} {Colors.r(f'unknown option: {arg}')}", file=sys.stderr)
+            print(f"Usage: {Colors.bold('investigate')} [-n LINES] [--mode debug|summary|blame] [LOG_FILE]", file=sys.stderr)
             sys.exit(1)
 
         # Non-flag argument:
@@ -88,7 +89,7 @@ def parse_args(argv: list[str]) -> tuple[int, str, str | None]:
         elif path is None:
             path = arg
         else:
-            print(f"investigate: unexpected extra argument: {arg}", file=sys.stderr)
+            print(f"{Colors.c('investigate')} {Colors.r(f'unexpected extra argument: {arg}')}", file=sys.stderr)
             sys.exit(1)
 
         i += 1
@@ -131,7 +132,7 @@ def read_logs(lines_needed: int, path: str | None) -> str:
         return "\n".join(data[-lines_needed:])
 
     print(
-        f"No piped input and no log found at {log_path}. "
+        f"{Colors.r('No piped input and no log found at')} {log_path}. "
         "Did you run via 'runi' or pipe logs into 'investigate'?",
         file=sys.stderr,
     )
@@ -221,7 +222,7 @@ def call_model(system_prompt: str, user_prompt: str) -> str:
         return strip_fences_and_quotes(raw)
 
     try:
-        return with_spinner("investigate", _call)
+        return with_spinner(Colors.c("investigate"), _call)
     except Exception as e:
         print(f"Error calling Ollama: {e}", file=sys.stderr)
         sys.exit(1)
@@ -238,7 +239,7 @@ def main() -> None:
     logs = read_logs(lines_needed, path)
 
     if not logs.strip():
-        print("No logs to analyze.", file=sys.stderr)
+        print(Colors.r("No logs to analyze."), file=sys.stderr)
         sys.exit(1)
 
     # Shared soft context warning

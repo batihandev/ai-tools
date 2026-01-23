@@ -40,10 +40,11 @@ import subprocess
 from pathlib import Path
 from textwrap import dedent
 
-from helper.llm import ollama_chat, strip_fences_and_quotes
-from helper.spinner import with_spinner
-from helper.context import warn_if_approaching_context
-from helper.env import load_repo_dotenv
+from .helper.llm import ollama_chat, strip_fences_and_quotes
+from .helper.spinner import with_spinner
+from .helper.context import warn_if_approaching_context
+from .helper.env import load_repo_dotenv
+from .helper.colors import Colors
 load_repo_dotenv()
 
 
@@ -142,7 +143,7 @@ def parse_args(argv: list[str]) -> tuple[str, bool, str | None]:
 
         if arg in ("git", "--diff"):
             if mode == "logs":
-                print("explain: cannot combine git/diff mode with logs mode.", file=sys.stderr)
+                print(f"{Colors.c('explain')} {Colors.r('cannot combine git/diff mode with logs mode.')}", file=sys.stderr)
                 sys.exit(1)
             mode = "diff"
             i += 1
@@ -155,7 +156,7 @@ def parse_args(argv: list[str]) -> tuple[str, bool, str | None]:
 
         if arg in ("log", "logs", "--log", "--logs"):
             if mode == "diff":
-                print("explain: cannot combine logs mode with git/diff mode.", file=sys.stderr)
+                print(f"{Colors.c('explain')} {Colors.r('cannot combine logs mode with git/diff mode.')}", file=sys.stderr)
                 sys.exit(1)
             mode = "logs"
             i += 1
@@ -166,24 +167,24 @@ def parse_args(argv: list[str]) -> tuple[str, bool, str | None]:
             sys.exit(0)
 
         if arg.startswith("-"):
-            print(f"explain: unknown option: {arg}", file=sys.stderr)
+            print(f"{Colors.c('explain')} {Colors.r(f'unknown option: {arg}')}", file=sys.stderr)
             sys.exit(1)
 
         # non-flag argument: treat as file path
         if path is None:
             path = arg
         else:
-            print(f"explain: unexpected extra argument: {arg}", file=sys.stderr)
+            print(f"{Colors.c('explain')} {Colors.r(f'unexpected extra argument: {arg}')}", file=sys.stderr)
             sys.exit(1)
 
         i += 1
 
     if mode != "diff" and use_all:
-        print("explain: --all is only valid together with --diff/git.", file=sys.stderr)
+        print(f"{Colors.c('explain')} {Colors.r('--all is only valid together with --diff/git.')}", file=sys.stderr)
         sys.exit(1)
 
     if mode in ("diff", "logs") and path is not None:
-        print("explain: cannot combine a file path with git/logs mode.", file=sys.stderr)
+        print(f"{Colors.c('explain')} {Colors.r('cannot combine a file path with git/logs mode.')}", file=sys.stderr)
         sys.exit(1)
 
     return mode, use_all, path
@@ -206,17 +207,17 @@ def run_git_diff(use_all: bool) -> str:
             check=False,
         )
     except FileNotFoundError:
-        print("[explain] git not found on PATH.", file=sys.stderr)
+        print(f"{Colors.c('[explain]')} {Colors.r('git not found on PATH.')}", file=sys.stderr)
         sys.exit(1)
 
     if result.returncode != 0:
-        print(f"[explain] git diff failed:\n{result.stderr}", file=sys.stderr)
+        print(f"{Colors.c('[explain]')} {Colors.r(f'git diff failed:')}\n{result.stderr}", file=sys.stderr)
         sys.exit(1)
 
     diff = result.stdout
     if not diff.strip():
         scope = "staged" if not use_all else "working tree"
-        print(f"[explain] No {scope} changes to describe (empty diff).", file=sys.stderr)
+        print(f"{Colors.c('[explain]')} {Colors.r(f'No {scope} changes to describe (empty diff).')}", file=sys.stderr)
         sys.exit(1)
 
     return diff
@@ -229,7 +230,7 @@ def read_investigate_log() -> str:
 
     if not log_path.exists():
         print(
-            f"[explain] No investigate log found at {log_path}.\n"
+            f"{Colors.c('[explain]')} {Colors.r(f'No investigate log found at {log_path}.')}\n"
             "          Run your command via 'runi' / 'investigate' first, "
             "or pipe logs/text into 'explain', or pass a file path.",
             file=sys.stderr,
@@ -255,15 +256,15 @@ def read_auto_input(path: str | None) -> str:
     if path is not None:
         p = Path(path)
         if not p.exists():
-            print(f"[explain] File not found: {p}", file=sys.stderr)
+            print(f"{Colors.c('[explain]')} {Colors.r(f'File not found: {p}')}", file=sys.stderr)
             sys.exit(1)
         return p.read_text(encoding="utf-8", errors="ignore")
 
     # 3) interactive paste
-    print("[explain] Paste text (logs, diff, code, config, docs, or data), then press Ctrl+D.", file=sys.stderr)
+    print(f"{Colors.c('[explain]')} {Colors.m('Paste text (logs, diff, code, config, docs, or data), then press Ctrl+D.')}", file=sys.stderr)
     data = sys.stdin.read()
     if not data.strip():
-        print("[explain] No input provided.", file=sys.stderr)
+        print(f"{Colors.c('[explain]')} {Colors.r('No input provided.')}", file=sys.stderr)
         sys.exit(1)
     return data
 
@@ -644,9 +645,9 @@ def call_model(system_prompt: str, user_prompt: str, label: str) -> str:
         return strip_fences_and_quotes(raw)
 
     try:
-        return with_spinner(label, _call)
+        return with_spinner(Colors.c(label), _call)
     except Exception as e:
-        print(f"[explain] Error calling Ollama: {e}", file=sys.stderr)
+        print(f"{Colors.c('[explain]')} {Colors.r(f'Error calling Ollama: {e}')}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -674,7 +675,7 @@ def main() -> None:
             kind = kind_from_path(path) or guess_kind_from_content(content)
 
     if not content.strip():
-        print("[explain] No input to analyze.", file=sys.stderr)
+        print(f"{Colors.c('[explain]')} {Colors.r('No input to analyze.')}", file=sys.stderr)
         sys.exit(1)
 
     warn_if_approaching_context("explain", content)

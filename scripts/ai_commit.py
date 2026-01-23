@@ -19,7 +19,9 @@ from pydantic import BaseModel, Field, AliasChoices
 from .helper.env import load_repo_dotenv
 from .helper.llm import ollama_chat, strip_fences_and_quotes
 from .helper.spinner import with_spinner
+from .helper.spinner import with_spinner
 from .helper.clipboard import copy_to_clipboard
+from .helper.colors import Colors
 
 load_repo_dotenv()
 
@@ -97,7 +99,7 @@ def get_git_diff(use_all: bool, cwd: str) -> str:
             res = run_git_cmd(["diff"], cwd)
 
     if not res.stdout.strip():
-        print(f"\n\033[91m✗ No changes detected in: {cwd}\033[0m")
+        print(f"\n{Colors.r('✗ No changes detected in:')} {cwd}")
         sys.exit(0)
     return res.stdout
 
@@ -142,7 +144,7 @@ def main() -> None:
     while True:
         # 2. Generate Commit Message
         commit_data = with_spinner(
-            "\033[96mai_commit analyzing changes\033[0m",
+            Colors.c("ai_commit analyzing changes"),
             lambda: generate_commit(diff, cfg),
         )
 
@@ -154,69 +156,69 @@ def main() -> None:
             git_args += ["-m", bullet_text]
 
         # 4. Visual Presentation
-        print(f"\n\033[94m► Proposed Summary:\033[0m \033[1m{commit_data.summary}\033[0m")
+        print(f"\n{Colors.b('► Proposed Summary:')} {Colors.bold(commit_data.summary)}")
         for b in commit_data.bullets:
-            print(f"  \033[90m•\033[0m \033[32m{b.path}\033[0m: {b.explanation}")
+            print(f"  {Colors.grey('•')} {Colors.g(b.path)}: {b.explanation}")
 
         cmd_display = "git commit"
         cmd_display += f' -m "{summary_esc}"'
         for b in commit_data.bullets:
             cmd_display += f' \\\n  -m "- {b.path}: {b.explanation}"'
 
-        print(f"\n\033[93m► Generated Command:\033[0m\n{cmd_display}\n")
+        print(f"\n{Colors.y('► Generated Command:')}\n{cmd_display}\n")
 
         # 5. Menu
-        print(f"\033[95m[ai_commit]\033[0m Select action:")
-        print("  \033[94m1)\033[0m Copy command to clipboard")
-        print("  \033[94m2)\033[0m Commit locally now")
-        print("  \033[94m3)\033[0m Commit and Push to origin")
-        print("  \033[94m4)\033[0m Paraphrase Summary (Short Retry)")
-        print("  \033[94m5)\033[0m Full Retry (Regenerate from diff)")
-        print("  \033[94m6)\033[0m Cancel")
+        print(f"{Colors.m('[ai_commit]')} Select action:")
+        print(f"  {Colors.b('1)')} Copy command to clipboard")
+        print(f"  {Colors.b('2)')} Commit locally now")
+        print(f"  {Colors.b('3)')} Commit and Push to origin")
+        print(f"  {Colors.b('4)')} Paraphrase Summary (Short Retry)")
+        print(f"  {Colors.b('5)')} Full Retry (Regenerate from diff)")
+        print(f"  {Colors.b('6)')} Cancel")
 
         try:
-            choice = input(f"\n\033[95mSelection [1-6] (default 1):\033[0m ").strip()
+            choice = input(f"\n{Colors.m('Selection [1-6] (default 1):')} ").strip()
         except KeyboardInterrupt:
-            print("\n\033[90mCancelled.\033[0m")
+            print(f"\n{Colors.grey('Cancelled.')}")
             sys.exit(0)
 
         # 6. Action Handling
         if choice == "5":
-            print("\033[90mRegenerating...\033[0m")
+            print(Colors.grey("Regenerating..."))
             continue  # Re-enters the loop to call LLM again
 
         if choice == "4":
             # Slight tweak: you currently just re-run; kept as-is.
-            print("\033[90mRetrying with variety...\033[0m")
+            print(Colors.grey("Retrying with variety..."))
             continue
 
         if choice in ("2", "3"):
             staged_check = run_git_cmd(["diff", "--cached", "--name-only"], cfg.cwd)
             if not staged_check.stdout.strip():
-                print("\033[90mNo staged changes found. Auto-staging all changes...\033[0m")
+                print(Colors.grey("No staged changes found. Auto-staging all changes..."))
                 subprocess.run(["git", "-C", cfg.cwd, "add", "."], check=True)
 
             subprocess.run(["git", "-C", cfg.cwd] + git_args, check=True)
-            print("\033[92m✓ Committed successfully.\033[0m")
+            print(Colors.g("✓ Committed successfully."))
 
             if choice == "3":
-                print("\033[94mPushing to origin...\033[0m")
+                print(Colors.b("Pushing to origin..."))
                 push_with_upstream_if_needed(cfg.cwd)
-                print("\033[92m✓ Pushed successfully.\033[0m")
+                print(Colors.g("✓ Pushed successfully."))
             break  # Exit loop after successful commit
 
         elif choice in ("", "1"):
             success, backend = copy_to_clipboard(cmd_display.replace(" \\\n  ", " "))
             if success:
-                print(f"\033[92m✓ Copied to clipboard via {backend}.\033[0m")
+                print(Colors.g(f"✓ Copied to clipboard via {backend}."))
             break  # Exit loop after copy
 
         elif choice == "6":
-            print("\033[90mOperation cancelled.\033[0m")
+            print(Colors.grey("Operation cancelled."))
             break
 
         else:
-            print("\033[91mInvalid selection.\033[0m")
+            print(Colors.r("Invalid selection."))
             continue
 
 if __name__ == "__main__":

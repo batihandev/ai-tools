@@ -31,6 +31,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 
+from .helper.colors import Colors
+
 from faster_whisper import WhisperModel
 
 _PUNCT_RE = re.compile(r"[^\w\s']+", re.UNICODE)  # keep apostrophes in contractions
@@ -154,35 +156,35 @@ def parse_args(argv: list[str]) -> Args:
         a = tokens[i]
         if a == "--model":
             if i + 1 >= len(tokens):
-                print("[voice-capture] Missing value for --model", file=sys.stderr)
+                print(f"{Colors.c('[voice-capture]')} {Colors.r('Missing value for --model')}", file=sys.stderr)
                 sys.exit(1)
             model = tokens[i + 1]
             i += 2
             continue
         if a == "--lang":
             if i + 1 >= len(tokens):
-                print("[voice-capture] Missing value for --lang", file=sys.stderr)
+                print(f"{Colors.c('[voice-capture]')} {Colors.r('Missing value for --lang')}", file=sys.stderr)
                 sys.exit(1)
             lang = tokens[i + 1]
             i += 2
             continue
         if a == "--device":
             if i + 1 >= len(tokens):
-                print("[voice-capture] Missing value for --device", file=sys.stderr)
+                print(f"{Colors.c('[voice-capture]')} {Colors.r('Missing value for --device')}", file=sys.stderr)
                 sys.exit(1)
             device = tokens[i + 1]
             i += 2
             continue
         if a == "--compute":
             if i + 1 >= len(tokens):
-                print("[voice-capture] Missing value for --compute", file=sys.stderr)
+                print(f"{Colors.c('[voice-capture]')} {Colors.r('Missing value for --compute')}", file=sys.stderr)
                 sys.exit(1)
             compute_type = tokens[i + 1]
             i += 2
             continue
         if a == "--text":
             if i + 1 >= len(tokens):
-                print("[voice-capture] Missing value for --text", file=sys.stderr)
+                print(f"{Colors.c('[voice-capture]')} {Colors.r('Missing value for --text')}", file=sys.stderr)
                 sys.exit(1)
             text_mode = tokens[i + 1]  # raw | literal | json
             i += 2
@@ -192,7 +194,7 @@ def parse_args(argv: list[str]) -> Args:
         i += 1
 
     if not cleaned:
-        print("[voice-capture] Missing args", file=sys.stderr)
+        print(f"{Colors.c('[voice-capture]')} {Colors.r('Missing args')}", file=sys.stderr)
         sys.exit(1)
 
     if cleaned[0] == "record":
@@ -230,7 +232,7 @@ def main() -> None:
     else:
         audio = args.target
         if audio is None or not audio.exists():
-            print(f"[voice-capture] Not found: {audio}", file=sys.stderr)
+            print(f"{Colors.c('[voice-capture]')} {Colors.r(f'Not found: {audio}')}", file=sys.stderr)
             sys.exit(1)
         audio_path = str(audio)
 

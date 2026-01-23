@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from .helper.env import load_repo_dotenv
 from .helper.llm import ollama_chat, strip_fences_and_quotes
 from .helper.spinner import with_spinner
+from .helper.colors import Colors
 
 load_repo_dotenv()
 
@@ -277,7 +278,7 @@ def _format_cli(out: TeachOut) -> str:
     """
     if out.raw_error:
         return (
-            "\033[91m✗ Error: model did not return valid JSON.\n\033[0m\n"
+            f"{Colors.r('✗ Error: model did not return valid JSON.')}\n\n"
             "Raw output:\n"
             + (out.raw_output or out.reply or "")
         )
@@ -285,45 +286,45 @@ def _format_cli(out: TeachOut) -> str:
     lines: List[str] = []
 
     # Header colors: 94=blue, 92=green, 91=red, 93=yellow
-    lines.append(f"\033[94m► Corrected (natural):\033[0m {out.corrected_natural.strip()}")
-    lines.append(f"\033[94m► Corrected (literal):\033[0m  {out.corrected_literal.strip()}")
+    lines.append(f"{Colors.b('► Corrected (natural):')} {out.corrected_natural.strip()}")
+    lines.append(f"{Colors.b('► Corrected (literal):')}  {out.corrected_literal.strip()}")
 
     mistakes = out.mistakes or []
     if mistakes:
         lines.append("")
-        lines.append("\033[91m⚠ Mistakes:\033[0m")
+        lines.append(Colors.r("⚠ Mistakes:"))
         for m in mistakes:
             frm = (m.frm or "").strip()
             to = (m.to or "").strip()
             why = (m.why or "").strip()
-            lines.append(f"  \033[91m✗\033[0m {frm} → \033[92m{to}\033[0m")
-            lines.append(f"     \033[90m({why})\033[0m")
+            lines.append(f"  {Colors.r('✗')} {frm} → {Colors.g(to)}")
+            lines.append(f"     {Colors.grey(f'({why})')}")
 
     pron = out.pronunciation or []
     if pron:
         lines.append("")
-        lines.append("\033[93m🔊 Pronunciation:\033[0m")
+        lines.append(Colors.y("🔊 Pronunciation:"))
         for p in pron:
             word = (p.word or "").strip()
             ipa = (p.ipa or "").strip()
             cue = (p.cue or "").strip()
             ipa_part = f"/{ipa}/" if ipa else ""
-            lines.append(f"  {word} \033[90m{ipa_part}\033[0m")
+            lines.append(f"  {word} {Colors.grey(ipa_part)}")
             lines.append(f"     → {cue}")
 
     reply = (out.reply or "").strip()
     if reply:
         lines.append("")
-        lines.append("\033[92m💬 Reply:\033[0m")
+        lines.append(Colors.g("💬 Reply:"))
         lines.append(f"  {reply}")
 
     q = (out.follow_up_question or "").strip()
     if q:
         lines.append("")
-        lines.append("\033[92m❓ Follow-up:\033[0m")
+        lines.append(Colors.g("❓ Follow-up:"))
         lines.append(f"  {q}")
 
-    return "\n".join(lines).strip() + "\n\033[0m"
+    return "\n".join(lines).strip() + Colors.RESET
 
 
 def _print_help() -> None:
