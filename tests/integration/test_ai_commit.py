@@ -2,7 +2,8 @@
 """Integration tests for scripts/ai_commit.py."""
 
 import json
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
+from scripts.ai_commit import CommitData, CommitFile
 
 
 class TestGenerateCommit:
@@ -90,3 +91,54 @@ class TestGenerateCommit:
 
         assert result.summary == "Update README"
         assert not result.is_error
+
+
+class TestMainRetry:
+    """Tests for the main execution flow and retry logic."""
+
+    def test_main_retry_with_double_context(self):
+        """Test that entering 'x' on error doubles the context size and retries."""
+        from scripts.ai_commit import main
+        
+        # Mocks
+        mock_diff = "some diff"
+        
+        # CommitData responses
+        # 1. Error response
+        error_data = CommitData(
+            summary="Error",
+            bullets=[],
+            raw_output="Context too small",
+            is_error=True
+        )
+        # 2. Success response
+        success_data = CommitData(
+            summary="Fixed",
+            bullets=[CommitFile(path="a.py", explanation="fix")],
+            raw_output="",
+            is_error=False
+        )
+        
+        with patch("scripts.ai_commit.get_git_diff", return_value=mock_diff), \
+             patch("scripts.ai_commit.with_spinner", side_effect=lambda msg, func: func()), \
+             patch("scripts.ai_commit.generate_commit", side_effect=[error_data, success_data]) as mock_generate, \
+             patch("builtins.input", side_effect=['x', '6']), \
+             patch("scripts.ai_commit.run_git_cmd"), \
+             patch("scripts.ai_commit.push_with_upstream_if_needed"), \
+             patch("subprocess.run"), \
+             patch("sys.argv", ["ai_commit"]), \
+             patch("sys.exit"):
+             
+             main()
+             
+             assert mock_generate.call_count == 2
+             
+             # 1st call: default cfg
+             call_1_args = mock_generate.call_args_list[0]
+             cfg_1 = call_1_args[0][1] # (diff, cfg)
+             assert cfg_1.num_ctx == 8192
+             
+             # 2nd call: doubled cfg
+             call_2_args = mock_generate.call_args_list[1]
+             cfg_2 = call_2_args[0][1]
+             assert cfg_2.num_ctx == 8192 * 2

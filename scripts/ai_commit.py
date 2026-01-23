@@ -113,9 +113,23 @@ def main() -> None:
         
         if commit_data.is_error:
             print(f"\n{Colors.r('✗ LLM Error:')}\n{commit_data.raw_output}")
+            print(f"\n{Colors.y('Tip: Try staging fewer files or increasing context.')}")
+
             # Offer retry
-            if input(f"\n{Colors.m('Retry? [y/N]:')} ").lower().strip() == 'y':
+            retry_choice = input(f"\n{Colors.m('Retry? [y/N/x] (x=double context):')} ").lower().strip()
+            if retry_choice == 'y':
                 continue
+            if retry_choice == 'x':
+                cfg = CommitCfg(
+                    model=cfg.model,
+                    num_ctx=cfg.num_ctx * 2,
+                    timeout=cfg.timeout,
+                    temperature=cfg.temperature,
+                    cwd=cfg.cwd
+                )
+                print(f"{Colors.y(f'Context increased to {cfg.num_ctx}. Retrying...')}")
+                continue
+
             sys.exit(1)
 
         # 3. Prepare Commit Arguments
