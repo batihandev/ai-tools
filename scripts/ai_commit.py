@@ -21,7 +21,12 @@ from .helper.llm import ollama_chat
 from .helper.spinner import with_spinner
 from .helper.clipboard import copy_to_clipboard
 from .helper.colors import Colors
-from .helper.json_utils import strip_json_fence
+from .helper.json_utils import safe_parse_model
+from .helper.git import (
+    run_git_cmd,
+    push_with_upstream_if_needed,
+    get_git_diff,
+)
 
 load_repo_dotenv()
 
@@ -36,9 +41,13 @@ class CommitFile(BaseModel):
 class CommitData(BaseModel):
     summary: str = Field(
         validation_alias=AliasChoices("summary", "title", "header", "headline"),
-        description="A short imperative summary line",
+        description="A short imperative summary line (< 50 chars preferred).",
     )
     bullets: List[CommitFile] = Field(default_factory=list)
+    
+    # Fallback for display if something goes wrong but we have partial data
+    raw_output: str = ""
+    is_error: bool = False
 
 @dataclass(frozen=True)
 class CommitCfg:
@@ -49,86 +58,40 @@ class CommitCfg:
     cwd: str = os.environ.get("USER_PWD", os.getcwd())
 
 # -----------------------------------------------------------------------------
-# Git Helpers
-# -----------------------------------------------------------------------------
-
-def run_git_cmd(args: list[str], cwd: str) -> subprocess.CompletedProcess[str]:
-    """Executes a git command and returns the completed process object."""
-    return subprocess.run(
-        ["git", "-C", cwd] + args,
-        capture_output=True,
-        text=True,
-    )
-
-def git_stdout(args: list[str], cwd: str) -> str:
-    res = run_git_cmd(args, cwd)
-    return (res.stdout or "").strip()
-
-def current_branch(cwd: str) -> str:
-    name = git_stdout(["rev-parse", "--abbrev-ref", "HEAD"], cwd)
-    if not name or name == "HEAD":
-        raise RuntimeError("Not on a branch (detached HEAD). Cannot set upstream.")
-    return name
-
-def has_upstream(cwd: str) -> bool:
-    # exits non-zero if no upstream is configured
-    res = run_git_cmd(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd)
-    return res.returncode == 0
-
-def push_with_upstream_if_needed(cwd: str) -> None:
-    """
-    Pushes to origin. If the current branch has no upstream, sets it to origin/<branch>.
-    """
-    if has_upstream(cwd):
-        subprocess.run(["git", "-C", cwd, "push"], check=True)
-        return
-
-    branch = current_branch(cwd)
-    subprocess.run(
-        ["git", "-C", cwd, "push", "--set-upstream", "origin", branch],
-        check=True,
-    )
-
-def get_git_diff(use_all: bool, cwd: str) -> str:
-    """Retrieves diff text, falling back from staged to unstaged if needed."""
-    if use_all:
-        res = run_git_cmd(["diff", "HEAD"], cwd)
-    else:
-        res = run_git_cmd(["diff", "--cached"], cwd)
-        if not res.stdout.strip():
-            res = run_git_cmd(["diff"], cwd)
-
-    if not res.stdout.strip():
-        print(f"\n{Colors.r('✗ No changes detected in:')} {cwd}")
-        sys.exit(0)
-    return res.stdout
-
-# -----------------------------------------------------------------------------
 # LLM Execution
 # -----------------------------------------------------------------------------
 
 def generate_commit(diff: str, cfg: CommitCfg) -> CommitData:
     system = dedent("""
-        You write git commits in JSON.
-        Keys: "summary" (string, <72 chars), "bullets" (list of {path, explanation}).
-        Focus on 'what' and 'why'. Return ONLY JSON.
+        You are an expert developer writing git commit messages.
+        
+        Rules:
+        1. "summary": strictly < 72 chars, imperative mood (e.g., "Add feature" not "Added feature").
+        2. "bullets": list of changed files with brief explanations.
+        3. Output MUST be valid JSON.
+        
+        Schema:
+        {
+          "summary": "string",
+          "bullets": [
+            { "path": "string", "explanation": "string" }
+          ]
+        }
     """).strip()
 
-    raw = ollama_chat(
-        system_prompt=system,
-        user_prompt=f"Generate commit for this diff:\n{diff}",
-        model=cfg.model,
-        num_ctx=cfg.num_ctx,
-        timeout=cfg.timeout,
-        temperature=cfg.temperature,
-    )
+    try:
+        raw = ollama_chat(
+            system_prompt=system,
+            user_prompt=f"Generate commit for this diff:\n{diff}",
+            model=cfg.model,
+            num_ctx=cfg.num_ctx,
+            timeout=cfg.timeout,
+            temperature=cfg.temperature,
+        )
+    except Exception as e:
+        return CommitData(summary="Error generating commit", bullets=[], raw_output=str(e), is_error=True)
 
-    cleaned = strip_json_fence(raw).strip()
-    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-    if not match:
-        raise ValueError(f"No JSON found in LLM output: {cleaned}")
-
-    return CommitData.model_validate_json(match.group(0))
+    return safe_parse_model(raw, CommitData, lambda r: CommitData(summary="Failed to parse JSON", bullets=[], raw_output=r, is_error=True))
 
 # -----------------------------------------------------------------------------
 # Main Execution Flow
@@ -147,6 +110,13 @@ def main() -> None:
             Colors.c("ai_commit analyzing changes"),
             lambda: generate_commit(diff, cfg),
         )
+        
+        if commit_data.is_error:
+            print(f"\n{Colors.r('✗ LLM Error:')}\n{commit_data.raw_output}")
+            # Offer retry
+            if input(f"\n{Colors.m('Retry? [y/N]:')} ").lower().strip() == 'y':
+                continue
+            sys.exit(1)
 
         # 3. Prepare Commit Arguments
         summary_esc = commit_data.summary.replace('"', '\\"')
@@ -188,7 +158,6 @@ def main() -> None:
             continue  # Re-enters the loop to call LLM again
 
         if choice == "4":
-            # Slight tweak: you currently just re-run; kept as-is.
             print(Colors.grey("Retrying with variety..."))
             continue
 

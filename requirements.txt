@@ -14,3 +14,8 @@ python-multipart
 onnxruntime
 onnxruntime-gpu
 httpx
+
+# Testing & Linting
+pytest
+pytest-mock
+ruff

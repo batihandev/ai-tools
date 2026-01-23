@@ -34,3 +34,11 @@ frontend-install:
 
 frontend-dev: frontend-install
 	@cd $(FRONTEND_DIR) && $(NPM) run dev -- --host 127.0.0.1 --port 5173
+
+test: install
+	@echo "Running tests..."
+	@$(VENV_DIR)/bin/pytest tests/ -v
+
+lint:
+	@echo "Linting..."
+	@$(VENV_DIR)/bin/ruff check scripts/ tests/
