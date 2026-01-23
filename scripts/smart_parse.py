@@ -42,11 +42,9 @@ import sys
 from pathlib import Path
 from datetime import datetime
 from textwrap import dedent
-import threading
-import time
 
-import requests
-from .helper.ollama_utils import resolve_ollama_url
+from .helper.llm import ollama_chat
+from .helper.spinner import with_spinner
 from .helper.env import load_repo_dotenv
 from .helper.colors import Colors
 load_repo_dotenv()
@@ -214,7 +212,6 @@ def call_model(snippet: str) -> str:
     Ask the local model to minimally repair the snippet,
     but keep the same format. Shows a spinner while waiting.
     """
-    ollama_url = resolve_ollama_url("http://localhost:11434")
     model = os.getenv("SMART_PARSE_MODEL", os.getenv("INVESTIGATE_MODEL", "llama3.1:8b"))
 
     system_prompt = dedent(
@@ -246,46 +243,20 @@ def call_model(snippet: str) -> str:
 
     user_prompt = f"Repair this snippet while preserving its format:\n\n{snippet}"
 
-    payload = {
-        "model": model,
-        "num_ctx": 16000,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "stream": False,
-    }
-
-    stop_flag = {"stop": False}
-
-    def spinner():
-        symbols = "|/-\\"
-        idx = 0
-        while not stop_flag["stop"]:
-            sys.stderr.write(f"\r{Colors.c('[smart_parse]')} processing " + symbols[idx % 4])
-            sys.stderr.flush()
-            idx += 1
-            time.sleep(0.1)
-        sys.stderr.write(f"\r{Colors.c('[smart_parse]')} processing done   \n")
-        sys.stderr.flush()
-
-    thread = threading.Thread(target=spinner, daemon=True)
-    thread.start()
-
     try:
-        resp = requests.post(
-            f"{ollama_url}/api/chat",
-            json=payload,
-            timeout=180,
+        return with_spinner(
+            Colors.c("[smart_parse]"),
+            lambda: ollama_chat(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                model=model,
+                num_ctx=16000,
+                timeout=180
+            )
         )
-        resp.raise_for_status()
-        return resp.json()["message"]["content"]
     except Exception as e:
         print(f"{Colors.c('[smart_parse]')} {Colors.r(f'Error calling Ollama: {e}')}", file=sys.stderr)
         sys.exit(1)
-    finally:
-        stop_flag["stop"] = True
-        thread.join()
 
 
 def main() -> None:
@@ -302,7 +273,7 @@ def main() -> None:
     final_out.write_text(fixed, encoding="utf-8")
 
     print(f"-> wrote fixed content to {Colors.g(str(final_out))}")
-    print(f"-> open parsed version in editor:")
+    print("-> open parsed version in editor:")
     print(f"   {Colors.b(f'code {final_out}')}")
 
 

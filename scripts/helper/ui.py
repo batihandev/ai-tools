@@ -1,10 +1,8 @@
 # scripts/helper/ui.py
 import os
-import sys
-from typing import Optional, ContextManager
+from typing import ContextManager
 
 # Shared formatting
-from .colors import Colors
 
 def _env_bool(name: str, default: str = "0") -> bool:
     return os.getenv(name, default).strip() == "1"

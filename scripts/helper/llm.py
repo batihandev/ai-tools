@@ -47,21 +47,21 @@ def ollama_chat(
     base_url = resolve_ollama_url("http://localhost:11434")
     model_name = model or get_default_model()
 
+    options: dict = {"num_ctx": num_ctx}
+    if temperature is not None:
+        options["temperature"] = temperature
+    if top_p is not None:
+        options["top_p"] = top_p
+
     payload = {
         "model": model_name,
-        "num_ctx": num_ctx,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
+        "options": options,
         "stream": False,
     }
-
-    # Add optional sampling parameters if provided
-    if temperature is not None:
-        payload["temperature"] = temperature
-    if top_p is not None:
-        payload["top_p"] = top_p
 
     resp = requests.post(
         f"{base_url}/api/chat",

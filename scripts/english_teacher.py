@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from dataclasses import dataclass
 from textwrap import dedent
@@ -16,7 +15,7 @@ from .helper.env import load_repo_dotenv
 from .helper.llm import ollama_chat
 from .helper.spinner import with_spinner
 from .helper.colors import Colors
-from .helper.json_utils import strip_json_fence
+from .helper.json_utils import safe_parse_model
 
 load_repo_dotenv()
 
@@ -199,39 +198,18 @@ def _build_user_prompt(text: str) -> str:
     ).strip()
 
 
-def _safe_parse_json(raw: str) -> TeachOut:
-    """
-    Robustly parse JSON from LLM output.
-    Handles:
-    - Markdown code fences (```json ... ```)
-    - Extra whitespace and preambles
-    - Missing or null fields (Pydantic defaults handle this)
-    """
-    cleaned = strip_json_fence(raw).strip()
-
-    # Try to extract JSON block if model ignored instructions and added markdown
-    json_match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-    if json_match:
-        cleaned = json_match.group(0)
-
-    try:
-        data = json.loads(cleaned)
-        if not isinstance(data, dict):
-            raise ValueError("JSON root is not an object")
-        # Pydantic validates and coerces; provides defaults for missing fields
-        return TeachOut(**data)
-    except Exception as e:
-        # Preserve raw output for debugging; return degraded response
-        return TeachOut(
-            corrected_natural="",
-            corrected_literal="",
-            mistakes=[],
-            pronunciation=[],
-            reply=cleaned,
-            follow_up_question="",
-            raw_error=True,
-            raw_output=cleaned,
-        )
+def _make_fallback_teachout(raw: str) -> TeachOut:
+    """Create fallback TeachOut when parsing fails."""
+    return TeachOut(
+        corrected_natural="",
+        corrected_literal="",
+        mistakes=[],
+        pronunciation=[],
+        reply=raw,
+        follow_up_question="",
+        raw_error=True,
+        raw_output=raw,
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -265,7 +243,7 @@ def teach(text: str, mode: str = DEFAULT_MODE, cfg: Optional[TeachCfg] = None) -
         temperature=cfg.temperature,
         top_p=cfg.top_p,
     )
-    return _safe_parse_json(raw)
+    return safe_parse_model(raw, TeachOut, _make_fallback_teachout)
 
 
 # -----------------------------------------------------------------------------

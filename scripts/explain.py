@@ -212,7 +212,7 @@ def run_git_diff(use_all: bool) -> str:
         sys.exit(1)
 
     if result.returncode != 0:
-        print(f"{Colors.c('[explain]')} {Colors.r(f'git diff failed:')}\n{result.stderr}", file=sys.stderr)
+        print(f"{Colors.c('[explain]')} {Colors.r('git diff failed:')}\n{result.stderr}", file=sys.stderr)
         sys.exit(1)
 
     diff = result.stdout
@@ -284,7 +284,7 @@ def looks_like_git_diff(text: str) -> bool:
         if ln.startswith("diff --git "):
             return True
         if ln.startswith(("+++", "---")) and any(
-            l.startswith("diff --git ") for l in lines[:10]
+            line.startswith("diff --git ") for line in lines[:10]
         ):
             return True
     return False
