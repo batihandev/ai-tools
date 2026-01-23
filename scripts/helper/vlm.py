@@ -13,6 +13,9 @@ from PIL import Image
 
 from .ollama_utils import resolve_ollama_url
 
+BASE_DIR = Path(__file__).resolve().parents[2]
+LOG_DIR = BASE_DIR / "logs"
+
 # ============================================================
 # One-toggle debug
 # ============================================================
@@ -55,7 +58,10 @@ from .ollama_utils import resolve_ollama_url
 DEFAULT_JPEG_QUALITY = 85
 DEFAULT_SNAP_MULT = 32
 DEFAULT_SNAP_MIN = 64
+DEFAULT_SNAP_MULT = 32
+DEFAULT_SNAP_MIN = 64
 DEFAULT_NUM_BATCH = 128
+DEFAULT_MAX_CTX = 8192  # Cap auto-context to prevent OOM on typical GPUs
 
 
 # -----------------------------
@@ -293,12 +299,16 @@ def _pick_num_ctx_from_sizes(sizes: List[Tuple[int, int]]) -> int:
 
     max_w = max(w for w, _ in sizes)
     max_h = max(h for _, h in sizes)
+    
+    # Allow env override for the ceiling
+    max_ctx = _env_int("VLM_MAX_CTX", DEFAULT_MAX_CTX)
 
     if max_w < 1000 and max_h < 1000:
         return 4096
-    if max_w < 2000 and max_h < 2000:
-        return 8192
-    return 12288
+    
+    # If not small, jump to 8192 (or capped max)
+    # 12288 was often overkill and caused failures on 8GB VRAM cards
+    return min(8192, max_ctx)
 
 
 def _probe_ollama(base_url: str) -> str:
@@ -332,7 +342,7 @@ def ollama_chat_with_images(
     user_prompt: str,
     image_paths: list[Path],
     model: str | None = None,
-    num_ctx: int = 4096,  # kept for API compatibility; overridden by auto ctx
+    num_ctx: int | None = None,  # If None, auto-calculated. If set, respected.
     temperature: float = 0.2,
     timeout: int = 180,
     quality_mode: bool = False,  # "quality" flag: scale ladder 90% then 75%
@@ -426,11 +436,15 @@ def ollama_chat_with_images(
             # preparation issues: try next scale
             continue
 
-        effective_num_ctx = _pick_num_ctx_from_sizes(sizes)
-        ui.log(
-            f"[vlm] attempt {attempt_no}/{len(scales)} scale={scale:.2f} "
-            f"imgs={len(images_b64)} sizes={sizes} => num_ctx={effective_num_ctx}"
-        )
+        if num_ctx is not None and num_ctx > 0:
+            effective_num_ctx = num_ctx
+            ui.log(f"[vlm] attempt {attempt_no}/{len(scales)} scale={scale:.2f} using explicit num_ctx={effective_num_ctx}")
+        else:
+            effective_num_ctx = _pick_num_ctx_from_sizes(sizes)
+            ui.log(
+                f"[vlm] attempt {attempt_no}/{len(scales)} scale={scale:.2f} "
+                f"imgs={len(images_b64)} sizes={sizes} => num_ctx={effective_num_ctx}"
+            )
 
         try:
             out = call_chat(images_b64, effective_num_ctx)

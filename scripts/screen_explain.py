@@ -25,7 +25,13 @@ USAGE
   screen_explain --model qwen2.5vl:3b
   screen_explain 3 --model qwen2.5vl:3b
   screen_explain /path/to/image.png --model qwen2.5vl:3b
+  screen_explain --model qwen2.5vl:3b
+  screen_explain 3 --model qwen2.5vl:3b
+  screen_explain /path/to/image.png --model qwen2.5vl:3b
 
+  # 7) Override context window
+  screen_explain --ctx 8192
+  screen_explain --ctx 20000 --model llama3.2-vision
 NOTES
   - Requires env var SCREENSHOT_DIR for default mode.
   - Cache:
@@ -86,6 +92,7 @@ class Args:
     model: str | None
     force_new: bool
     quality: bool
+    ctx: int | None
 
 
 def parse_args(argv: list[str]) -> Args:
@@ -96,6 +103,7 @@ def parse_args(argv: list[str]) -> Args:
     target: Optional[str] = None
     count: Optional[int] = None
     model: Optional[str] = None
+    ctx: Optional[int] = None
     force_new = False
     quality = False
 
@@ -107,6 +115,11 @@ def parse_args(argv: list[str]) -> Args:
     for a in it:
         if a == "--model":
             model = next(it, None)
+            continue
+        if a == "--ctx":
+            val = next(it, None)
+            if val and val.isdigit():
+                ctx = int(val)
             continue
         if a == "new":
             force_new = True
@@ -127,7 +140,7 @@ def parse_args(argv: list[str]) -> Args:
         count = int(target)
         target = None
 
-    return Args(target=target, count=count, model=model, force_new=force_new, quality=quality)
+    return Args(target=target, count=count, model=model, force_new=force_new, quality=quality, ctx=ctx)
 
 
 def screenshot_dir() -> Path:
@@ -353,9 +366,14 @@ def main() -> None:
     # -------------------------
     # 1) FAST CACHE CHECK FIRST (no reads)
     # -------------------------
+    # Prepare key material (include ctx if specific)
+    model_key_material = args.model
+    if args.ctx:
+        model_key_material = f"{model_key_material or 'default'}|ctx={args.ctx}"
+
     if not args.force_new:
         idx = _read_index()
-        fk = _fast_key(src_imgs, prompt, args.model)
+        fk = _fast_key(src_imgs, prompt, model_key_material)
         ck = idx.get(fk)
         if ck:
             cached_text = _read_cached(ck)
@@ -378,8 +396,8 @@ def main() -> None:
     # 3) Content-key caching (fast now because mirrored)
     # -------------------------
     idx = _read_index()
-    fk = _fast_key(src_imgs, prompt, args.model)  # original files metadata
-    ck = _content_key(imgs, prompt, args.model)   # mirrored metadata signature
+    fk = _fast_key(src_imgs, prompt, model_key_material)  # original files metadata
+    ck = _content_key(imgs, prompt, model_key_material)   # mirrored metadata signature
     idx[fk] = ck
     _write_index(idx)
 
@@ -395,6 +413,7 @@ def main() -> None:
             user_prompt=prompt,
             image_paths=imgs,
             model=args.model,
+            num_ctx=args.ctx,
             quality_mode=args.quality,
         )
 
