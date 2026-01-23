@@ -17,11 +17,11 @@ from pydantic import BaseModel, Field, AliasChoices
 
 # Relative imports
 from .helper.env import load_repo_dotenv
-from .helper.llm import ollama_chat, strip_fences_and_quotes
-from .helper.spinner import with_spinner
+from .helper.llm import ollama_chat
 from .helper.spinner import with_spinner
 from .helper.clipboard import copy_to_clipboard
 from .helper.colors import Colors
+from .helper.json_utils import strip_json_fence
 
 load_repo_dotenv()
 
@@ -123,7 +123,7 @@ def generate_commit(diff: str, cfg: CommitCfg) -> CommitData:
         temperature=cfg.temperature,
     )
 
-    cleaned = strip_fences_and_quotes(raw).strip()
+    cleaned = strip_json_fence(raw).strip()
     match = re.search(r"\{.*\}", cleaned, re.DOTALL)
     if not match:
         raise ValueError(f"No JSON found in LLM output: {cleaned}")

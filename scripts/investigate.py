@@ -4,7 +4,8 @@ import sys
 from pathlib import Path
 from textwrap import dedent
 
-from .helper.llm import ollama_chat, strip_fences_and_quotes
+from .helper.llm import ollama_chat
+from .helper.json_utils import strip_json_fence
 from .helper.spinner import with_spinner
 from .helper.context import warn_if_approaching_context
 from .helper.env import load_repo_dotenv
@@ -219,7 +220,7 @@ def call_model(system_prompt: str, user_prompt: str) -> str:
             num_ctx=16000,
             timeout=120,
         )
-        return strip_fences_and_quotes(raw)
+        return strip_json_fence(raw)
 
     try:
         return with_spinner(Colors.c("investigate"), _call)

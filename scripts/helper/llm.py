@@ -73,20 +73,3 @@ def ollama_chat(
     return data["message"]["content"]
 
 
-def strip_fences_and_quotes(text: str) -> str:
-    """
-    Remove common wrapping artifacts:
-      - ``` blocks
-      - single leading/trailing quotes or backticks
-    """
-    out = text.strip()
-
-    if "```" in out:
-        parts = out.split("```")
-        if len(parts) >= 3:
-            out = parts[1].strip() if parts[0].strip() == "" else parts[1].strip()
-
-    if out.startswith(("`", '"', "'")) and out.endswith(("`", '"', "'")):
-        out = out[1:-1].strip()
-
-    return out

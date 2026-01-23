@@ -42,18 +42,19 @@ import hashlib
 import heapq
 import json
 import os
-import re
 import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
-from typing import Any, Optional, Tuple
+from typing import Optional, Tuple
 
 from .helper.env import load_repo_dotenv
 from .helper.spinner import with_spinner
 from .helper.vlm import ollama_chat_with_images
 from .helper.colors import Colors
+from .helper.json_utils import try_parse_json, strip_json_fence
+from .helper.utils import atomic_write_text
 
 
 load_repo_dotenv()
@@ -76,11 +77,6 @@ MIRROR_MAX_FILES = 20
 MIRROR_MAX_BYTES = 100 * 1024 * 1024  # 100 MB
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
-
-_JSON_FENCE_RE = re.compile(
-    r"^\s*```(?:json)?\s*\n(.*?)\n\s*```\s*$",
-    re.DOTALL | re.IGNORECASE,
-)
 
 
 @dataclass(frozen=True)
@@ -201,47 +197,6 @@ def _sha256_bytes(data: bytes) -> str:
     return h.hexdigest()
 
 
-def _strip_json_fence(s: str) -> str:
-    m = _JSON_FENCE_RE.match(s)
-    if not m:
-        return s.strip()
-    return m.group(1).strip()
-
-
-def _try_parse_json(maybe: Any) -> tuple[Optional[Any], Optional[str]]:
-    if isinstance(maybe, (dict, list, int, float, bool)) or maybe is None:
-        return maybe, None
-
-    if not isinstance(maybe, str):
-        return None, str(maybe)
-
-    raw = maybe
-    s = _strip_json_fence(raw)
-
-    try:
-        parsed = json.loads(s)
-    except Exception:
-        return None, raw
-
-    if isinstance(parsed, str):
-        s2 = _strip_json_fence(parsed).strip()
-        if (s2.startswith("{") and s2.endswith("}")) or (s2.startswith("[") and s2.endswith("]")):
-            try:
-                parsed2 = json.loads(s2)
-                return parsed2, raw
-            except Exception:
-                return parsed, raw
-
-    return parsed, raw
-
-
-def _atomic_write_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
-
-
 def _read_index() -> dict[str, str]:
     try:
         if CACHE_INDEX.exists():
@@ -254,7 +209,7 @@ def _read_index() -> dict[str, str]:
 
 
 def _write_index(idx: dict[str, str]) -> None:
-    _atomic_write_text(CACHE_INDEX, json.dumps(idx, indent=2, ensure_ascii=False))
+    atomic_write_text(CACHE_INDEX, json.dumps(idx, indent=2, ensure_ascii=False))
 
 
 def _fast_sig_for_file(p: Path) -> str:
@@ -301,9 +256,9 @@ def _read_cached(ck: str) -> Optional[str]:
 def _write_cache(ck: str, text: str, is_json: bool) -> None:
     cache_json_path, cache_txt_path = _cache_paths(ck)
     if is_json:
-        _atomic_write_text(cache_json_path, text)
+        atomic_write_text(cache_json_path, text)
     else:
-        _atomic_write_text(cache_txt_path, text)
+        atomic_write_text(cache_txt_path, text)
 
 
 def _mirror_name_for(src: Path, idx: int) -> str:
@@ -405,7 +360,7 @@ def main() -> None:
         if ck:
             cached_text = _read_cached(ck)
             if cached_text is not None:
-                _atomic_write_text(LAST_JSON, cached_text)
+                atomic_write_text(LAST_JSON, cached_text)
                 print(cached_text)
                 return
 
@@ -431,7 +386,7 @@ def main() -> None:
     if not args.force_new:
         cached_text = _read_cached(ck)
         if cached_text is not None:
-            _atomic_write_text(LAST_JSON, cached_text)
+            atomic_write_text(LAST_JSON, cached_text)
             print(cached_text)
             return
 
@@ -447,22 +402,22 @@ def main() -> None:
         result = with_spinner(Colors.c("screen_explain"), _call)
     except Exception as e:
         err = f"{Colors.c('[screen_explain]')} {Colors.r(f'Error during analysis: {e}')}"
-        _atomic_write_text(LAST_JSON, err)
+        atomic_write_text(LAST_JSON, err)
         print(err, file=sys.stderr)
         sys.exit(1)
 
-    parsed, raw = _try_parse_json(result)
+    parsed, raw = try_parse_json(result)
 
     if parsed is not None:
         out_text = json.dumps(parsed, indent=2, ensure_ascii=False)
         _write_cache(ck, out_text, is_json=True)
-        _atomic_write_text(LAST_JSON, out_text)
+        atomic_write_text(LAST_JSON, out_text)
         print(out_text)
         return
 
     raw_text = raw if raw is not None else str(result)
     _write_cache(ck, raw_text, is_json=False)
-    _atomic_write_text(LAST_JSON, raw_text)
+    atomic_write_text(LAST_JSON, raw_text)
     print(raw_text)
 
 

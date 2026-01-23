@@ -15,3 +15,14 @@ def load_repo_dotenv() -> None:
     env_path = repo_root / ".env"
     if env_path.exists():
         load_dotenv(env_path)
+
+
+def env_bool(name: str, default: str = "0") -> bool:
+    return os.getenv(name, default).strip() == "1"
+
+
+def env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)).strip())
+    except Exception:
+        return default

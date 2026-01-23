@@ -40,7 +40,8 @@ import subprocess
 from pathlib import Path
 from textwrap import dedent
 
-from .helper.llm import ollama_chat, strip_fences_and_quotes
+from .helper.llm import ollama_chat
+from .helper.json_utils import strip_json_fence
 from .helper.spinner import with_spinner
 from .helper.context import warn_if_approaching_context
 from .helper.env import load_repo_dotenv
@@ -642,7 +643,7 @@ def call_model(system_prompt: str, user_prompt: str, label: str) -> str:
             timeout=180,
         )
         # For explain: we want plain text; fences/outer quotes are noise.
-        return strip_fences_and_quotes(raw)
+        return strip_json_fence(raw)
 
     try:
         return with_spinner(Colors.c(label), _call)

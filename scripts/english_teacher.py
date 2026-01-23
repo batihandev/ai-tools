@@ -13,9 +13,10 @@ from pydantic import BaseModel, Field
 
 # IMPORTANT: relative imports (works when imported as scripts.english_teacher)
 from .helper.env import load_repo_dotenv
-from .helper.llm import ollama_chat, strip_fences_and_quotes
+from .helper.llm import ollama_chat
 from .helper.spinner import with_spinner
 from .helper.colors import Colors
+from .helper.json_utils import strip_json_fence
 
 load_repo_dotenv()
 
@@ -206,7 +207,7 @@ def _safe_parse_json(raw: str) -> TeachOut:
     - Extra whitespace and preambles
     - Missing or null fields (Pydantic defaults handle this)
     """
-    cleaned = strip_fences_and_quotes(raw).strip()
+    cleaned = strip_json_fence(raw).strip()
 
     # Try to extract JSON block if model ignored instructions and added markdown
     json_match = re.search(r"\{.*\}", cleaned, re.DOTALL)
