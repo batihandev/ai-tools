@@ -19,3 +19,4 @@ httpx
 pytest
 pytest-mock
 ruff
+rich

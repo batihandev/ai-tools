@@ -5,17 +5,19 @@ from typing import Any, Callable, Optional, TypeVar
 
 T = TypeVar("T")
 
+# Non-greedy, newline-agnostic fence capture (first fenced block only)
 _JSON_FENCE_RE = re.compile(
-    r"^\s*```(?:json)?\s*\n(.*?)\n\s*```\s*$",
+    r"```(?:json)?\s*(.*?)\s*```",
     re.DOTALL | re.IGNORECASE,
 )
 
-_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
-
 
 def strip_json_fence(s: str) -> str:
-    """Remove markdown code fences from JSON content."""
-    m = _JSON_FENCE_RE.match(s)
+    """
+    Remove markdown code fences from JSON content.
+    Finds the *first* fenced block. If none, returns stripped input.
+    """
+    m = _JSON_FENCE_RE.search(s)
     if not m:
         return s.strip()
     return m.group(1).strip()
@@ -23,27 +25,34 @@ def strip_json_fence(s: str) -> str:
 
 def extract_json_object(text: str) -> str:
     """
-    Extract the first JSON object {...} from text.
-    
-    Handles:
-    - Markdown code fences (```json ... ```)
-    - Extra preamble/postamble text from LLM
-    - Returns original text if no JSON object found
+    Extract the first JSON object likely to be valid.
+
+    Strategy:
+    1) If a ```json ... ``` fence exists, return its content.
+    2) Else, return substring from first '{' to last '}' (inclusive).
+    3) Else, return stripped original text.
     """
-    cleaned = strip_json_fence(text).strip()
-    
-    match = _JSON_OBJECT_RE.search(cleaned)
-    if match:
-        return match.group(0)
-    
-    return cleaned
+    m = _JSON_FENCE_RE.search(text)
+    if m:
+        return m.group(1).strip()
+
+    start = text.find("{")
+    end = text.rfind("}")
+
+    if start != -1 and end != -1 and end > start:
+        return text[start : end + 1]
+
+    return text.strip()
 
 
 def try_parse_json(maybe: Any) -> tuple[Optional[Any], Optional[str]]:
     """
     Attempts to parse 'maybe' as JSON.
+
     Returns (parsed_object, original_raw_string).
-    If parsing fails, parsed_object is None.
+    - If parsing succeeds and input was a string: raw string is returned in 2nd slot.
+    - If input wasn't a string and is already JSON-compatible: returns (maybe, None).
+    - If parsing fails: returns (None, raw_string_representation).
     """
     if isinstance(maybe, (dict, list, int, float, bool)) or maybe is None:
         return maybe, None
@@ -52,16 +61,18 @@ def try_parse_json(maybe: Any) -> tuple[Optional[Any], Optional[str]]:
         return None, str(maybe)
 
     raw = maybe
-    s = strip_json_fence(raw)
+    s = extract_json_object(raw)
+    s = strip_json_fence(s)
 
     try:
         parsed = json.loads(s)
     except Exception:
         return None, raw
 
-    # Double-decoding check (if the JSON string itself contains a JSON string)
+    # Double-decoding check (JSON string containing JSON)
     if isinstance(parsed, str):
-        s2 = strip_json_fence(parsed).strip()
+        s2 = extract_json_object(parsed)
+        s2 = strip_json_fence(s2).strip()
         if (s2.startswith("{") and s2.endswith("}")) or (s2.startswith("[") and s2.endswith("]")):
             try:
                 parsed2 = json.loads(s2)
@@ -79,24 +90,17 @@ def safe_parse_model(
 ) -> T:
     """
     Parse LLM output into a Pydantic model with graceful fallback.
-    
+
     Args:
         raw: Raw LLM output string (may contain markdown fences, preamble, etc.)
         model_cls: Pydantic model class to parse into
         fallback_factory: Callable that takes the raw string and returns a fallback model instance
-        
+
     Returns:
-        Parsed model instance, or fallback if parsing fails
-        
-    Example:
-        result = safe_parse_model(
-            raw=llm_output,
-            model_cls=MyModel,
-            fallback_factory=lambda r: MyModel(error=True, raw_output=r)
-        )
+        Parsed model instance, or fallback if parsing fails.
     """
     json_str = extract_json_object(raw)
-    
+
     try:
         data = json.loads(json_str)
         if not isinstance(data, dict):
@@ -104,4 +108,3 @@ def safe_parse_model(
         return model_cls(**data)
     except Exception:
         return fallback_factory(raw)
-

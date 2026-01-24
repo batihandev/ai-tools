@@ -39,7 +39,6 @@ import hashlib
 import heapq
 import json
 import os
-import re
 import shutil
 import sys
 from dataclasses import dataclass
@@ -50,7 +49,6 @@ from typing import List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 from .helper.env import load_repo_dotenv
-from .helper.spinner import with_spinner
 from .helper.vlm import ollama_chat_with_images
 from .helper.colors import Colors
 from .helper.json_utils import safe_parse_model
@@ -100,11 +98,13 @@ class UIElement(BaseModel):
     description: str
     status: str = "visible"
 
+
 class Issue(BaseModel):
     title: str
     severity: str = "medium"  # low, medium, high, critical
     description: str
     recommendation: str
+
 
 class ScreenAnalysis(BaseModel):
     summary: str = Field(..., description="High-level summary of what is visible on the screen.")
@@ -112,7 +112,7 @@ class ScreenAnalysis(BaseModel):
     detected_text: List[str] = Field(default_factory=list, description="Important text detected on screen.")
     issues: List[Issue] = Field(default_factory=list, description="Potential errors, bugs, or anomalies found.")
     next_checks: List[str] = Field(default_factory=list, description="Suggested next steps for the developer.")
-    
+
     # Fallback fields for raw output if parsing partially fails
     raw_output: str = ""
     is_raw_error: bool = False
@@ -160,6 +160,7 @@ def parse_args(argv: list[str]) -> Args:
         if count is None and a.isdigit():
             count = int(a)
             continue
+
         print(f"{Colors.c('[screen_explain]')} {Colors.r(f'Unexpected arg: {a}')}", file=sys.stderr)
         sys.exit(1)
 
@@ -177,12 +178,17 @@ def parse_args(argv: list[str]) -> Args:
 def screenshot_dir() -> Path:
     p = os.getenv("SCREENSHOT_DIR")
     if not p:
-        print(f"{Colors.c('[screen_explain]')} {Colors.r('SCREENSHOT_DIR environment variable is not set.')}", file=sys.stderr)
+        print(
+            f"{Colors.c('[screen_explain]')} {Colors.r('SCREENSHOT_DIR environment variable is not set.')}",
+            file=sys.stderr,
+        )
         sys.exit(1)
+
     d = Path(p)
     if not d.exists():
         print(f"{Colors.c('[screen_explain]')} {Colors.r(f'Directory {d} does not exist.')}", file=sys.stderr)
         sys.exit(1)
+
     return d
 
 
@@ -212,13 +218,15 @@ def _mirror_name_for(src: Path, idx: int) -> str:
 
 
 def _ensure_mirrored(srcs: list[Path]) -> list[Path]:
-    dsts = []
+    dsts: list[Path] = []
     for i, src in enumerate(srcs):
         dst = MIRROR_DIR / _mirror_name_for(src, i)
         dsts.append(dst)
+
         if not dst.exists():
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, dst)
+
     return dsts
 
 
@@ -227,11 +235,12 @@ def _prune_mirror_dir(max_files: int, max_bytes: int) -> None:
     total = 0
 
     for p in MIRROR_DIR.iterdir():
-        if p.is_file():
-            st = p.stat()
-            files.append((p, st.st_size, st.st_mtime))
-            total += st.st_size
-    
+        if not p.is_file():
+            continue
+        st = p.stat()
+        files.append((p, st.st_size, st.st_mtime))
+        total += st.st_size
+
     files.sort(key=lambda t: t[2])  # oldest first
 
     while len(files) > max_files:
@@ -254,36 +263,30 @@ def _read_index() -> dict[str, str]:
         try:
             val = json.loads(CACHE_INDEX.read_text(encoding="utf-8"))
             if isinstance(val, dict):
-                return val
+                # ensure key/value strings (defensive)
+                out: dict[str, str] = {}
+                for k, v in val.items():
+                    if isinstance(k, str) and isinstance(v, str):
+                        out[k] = v
+                return out
         except Exception:
             pass
     return {}
 
 
 def _write_index(idx: dict[str, str]) -> None:
-    atomic_write_text(CACHE_INDEX, json.dumps(idx, indent=2))
+    atomic_write_text(CACHE_INDEX, json.dumps(idx, indent=2, ensure_ascii=False))
 
 
 def _fast_key(imgs: list[Path], prompt: str, model_sig: str) -> str:
-    # Key based on filename + mtime + size (fast, no content read)
-    sig_parts = []
+    # Key based on filename + mtime + size (fast; no content read)
+    sig_parts: list[str] = []
     for p in imgs:
         st = p.stat()
         sig_parts.append(f"{p.name}|{st.st_size}|{st.st_mtime_ns}")
-    
+
     material = f"model:{model_sig}\nfiles:{','.join(sig_parts)}\nprompt:{prompt}"
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
-
-
-def _content_key(imgs: list[Path], prompt: str, model_sig: str) -> str:
-    # Key based on actual content hash (if needed) but here matching logic:
-    # We surely need to rely on the file stats being stable for local files.
-    # The 'mirror' logic already ensures unique names for content.
-    # So we can reuse the same logic or actually hash content if we want 100% safety.
-    # For speed, we will assume mirrored filenames (including size/mtime) are sufficient.
-    
-    # We will just hash the filenames in the mirror, which contain metadata.
-    return _fast_key(imgs, prompt, model_sig)
 
 
 def _cache_paths(ck: str) -> Tuple[Path, Path]:
@@ -294,71 +297,73 @@ def _cache_paths(ck: str) -> Tuple[Path, Path]:
 # LLM & Prompting
 # -----------------------------------------------------------------------------
 
-def build_prompt(n: int) -> str:
-    return dedent(f"""
+def build_system_prompt() -> str:
+    return dedent("""
         You are an expert UI/UX developer and QA engineer.
-        
-        Analyze the provided {n} screenshot(s).
-        
-        Your Goal:
-        1. Summarize what is shown.
-        2. Identify specific UI elements.
-        3. Detect any errors, visual glitches, or weird states.
-        4. Suggest what a developer should check next.
 
-        Constraint:
-        - Return ONLY valid JSON matching this schema:
-        
-        {{
+        Output ONLY valid JSON. No markdown, no code fences, no explanations.
+
+        Requirements:
+        - status must be one of: "visible", "hidden", "disabled"
+        - severity must be one of: "low", "medium", "high", "critical"
+        - Every ui_elements item MUST include "name" and "description"
+
+        Output format (example shape, not literal):
+        {
             "summary": "string",
             "ui_elements": [
-                {{ "name": "string", "description": "string", "status": "visible|hidden|disabled" }}
+                { "name": "string", "description": "string", "status": "visible"|"hidden"|"disabled" }
             ],
             "detected_text": ["string"],
             "issues": [
-                {{ "title": "string", "severity": "low|medium|high|critical", "description": "string", "recommendation": "string" }}
+                { "title": "string", "severity": "low"|"medium"|"high"|"critical", "description": "string", "recommendation": "string" }
             ],
             "next_checks": ["string"]
-        }}
+        }
+    """).strip()
+
+
+def build_user_prompt(n: int) -> str:
+    return dedent(f"""
+        Analyze the provided {n} screenshot(s).
+
+        Summarize what is shown, list key UI elements, detect visible errors or odd states, and suggest what a developer should check next.
     """).strip()
 
 
 def _make_fallback_analysis(raw: str) -> ScreenAnalysis:
-    """Create fallback ScreenAnalysis when parsing fails."""
     return ScreenAnalysis(
         summary="Raw output (parsing failed)",
         raw_output=raw,
-        is_raw_error=True
+        is_raw_error=True,
     )
 
 
 def _format_cli(analysis: ScreenAnalysis) -> str:
+    _bold = getattr(Colors, "bold", Colors.b)
+
     if analysis.is_raw_error:
         return f"{Colors.r('✗ Failed to parse JSON response.')}\n\nRAW OUTPUT:\n{analysis.raw_output}"
 
-    out = []
-    
-    # Summary
+    out: list[str] = []
+
     out.append(f"\n{Colors.b('► Summary')}")
     out.append(f"  {analysis.summary}")
 
-    # Issues (High Priority)
     if analysis.issues:
-        out.append(f"\n{Colors.r('► detected Issues')}")
+        out.append(f"\n{Colors.r('► Issues')}")
         for err in analysis.issues:
-            sev_color = Colors.r if err.severity in ('high', 'critical') else Colors.y
-            out.append(f"  {sev_color('•')} {Colors.bold(err.title)} {Colors.grey(f'[{err.severity}]')}")
+            sev_color = Colors.r if err.severity in ("high", "critical") else Colors.y
+            out.append(f"  {sev_color('•')} {_bold(err.title)} {Colors.grey(f'[{err.severity}]')}")
             out.append(f"    {err.description}")
             if err.recommendation:
                 out.append(f"    {Colors.g('→')} {Colors.grey('Suggest:')} {err.recommendation}")
 
-    # UI Elements (if verbose or interesting? Just listing them)
     if analysis.ui_elements:
         out.append(f"\n{Colors.c('► UI Elements')}")
         for el in analysis.ui_elements:
-            out.append(f"  {Colors.c('•')} {Colors.bold(el.name)}: {el.description}")
+            out.append(f"  {Colors.c('•')} {_bold(el.name)}: {el.description} {Colors.grey(f'[{el.status}]')}")
 
-    # Next Checks
     if analysis.next_checks:
         out.append(f"\n{Colors.g('► Next Checks')}")
         for check in analysis.next_checks:
@@ -375,7 +380,7 @@ def main() -> None:
     args = parse_args(sys.argv[1:])
     base = screenshot_dir()
 
-    # Select Images
+    # Select Images (core behavior preserved)
     if args.target:
         p = Path(args.target)
         if p.is_dir():
@@ -393,37 +398,43 @@ def main() -> None:
     for p in src_imgs:
         print(f"  {Colors.grey(str(p))}")
 
-    # Prepare logic
-    prompt = build_prompt(len(src_imgs))
-    
-    # Resolve model: CLI arg > SCREEN_EXPLAIN_MODEL > None (falls back to global default in VLM)
+    user_prompt = build_user_prompt(len(src_imgs))
+    system_prompt = build_system_prompt()
+
+    # Resolve model: CLI arg > SCREEN_EXPLAIN_MODEL > None (fallback in VLM helper)
     model_to_use = args.model or os.getenv("SCREEN_EXPLAIN_MODEL")
     if model_to_use and not model_to_use.strip():
         model_to_use = None
-        
-    model_sig = model_to_use or "default"
+
+    model_sig = (model_to_use or "default").strip()
     if args.ctx:
         model_sig += f"|ctx={args.ctx}"
 
-    # Index Check (Fast)
+    prompt_sig = f"USER:\n{user_prompt}\n\nSYSTEM:\n{system_prompt}"
+
+    # Fast index lookup
     idx = _read_index()
-    fk = _fast_key(src_imgs, prompt, model_sig)
-    
+    fk = _fast_key(src_imgs, prompt_sig, model_sig)
+
     if not args.force_new:
-        ck = idx.get(fk)
-        if ck:
-            json_path, _ = _cache_paths(ck)
+        ck_existing = idx.get(fk)
+        if ck_existing:
+            json_path, txt_path = _cache_paths(ck_existing)
             if json_path.exists():
                 try:
-                    cached_data = json.loads(json_path.read_text())
-                    # Validate against current schema
+                    cached_data = json.loads(json_path.read_text(encoding="utf-8"))
                     analysis = ScreenAnalysis(**cached_data)
+                    # Keep LAST_JSON aligned for tooling convenience
+                    try:
+                        atomic_write_text(LAST_JSON, analysis.model_dump_json(indent=2))
+                    except Exception:
+                        pass
                     print(_format_cli(analysis))
                     return
                 except Exception:
-                    pass  # Cache invalid or schema changed
+                    pass  # Cache invalid or schema changed; continue
 
-    # Mirror Images (IO)
+    # Mirror Images (core behavior preserved)
     try:
         mirrored_imgs = _ensure_mirrored(src_imgs)
         _prune_mirror_dir(MIRROR_MAX_FILES, MIRROR_MAX_BYTES)
@@ -431,39 +442,79 @@ def main() -> None:
         print(f"{Colors.r('Error mirroring images:')} {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Content Key
-    ck = _content_key(mirrored_imgs, prompt, model_sig)
-    
-    # Run Inference
-    def _run() -> str:
-        return ollama_chat_with_images(
-            user_prompt=prompt,
+    # Content key (currently equivalent to fast key by design)
+    ck = _fast_key(mirrored_imgs, prompt_sig, model_sig)
+
+    # Run inference
+    try:
+        raw_res = ollama_chat_with_images(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             image_paths=mirrored_imgs,
             model=model_to_use,
             num_ctx=args.ctx,
             quality_mode=args.quality,
         )
-
-    try:
-        raw_res = with_spinner(Colors.c("screen_explain thinking..."), _run)
     except Exception as e:
         print(f"\n{Colors.r('Analysis failed:')} {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Parse & Cache
-    analysis = safe_parse_model(raw_res, ScreenAnalysis, _make_fallback_analysis)
-    
-    # Save to cache
-    json_path, _ = _cache_paths(ck)
+    # Persist raw response for debugging (even if JSON parse fails)
+    json_path, txt_path = _cache_paths(ck)
     try:
-        atomic_write_text(json_path, analysis.model_dump_json())
-        idx[fk] = ck
-        _write_index(idx)
-        atomic_write_text(LAST_JSON, analysis.model_dump_json(indent=2))
-    except Exception as e:
-        print(f"{Colors.y('Warning: could not write cache:')} {e}", file=sys.stderr)
+        atomic_write_text(txt_path, str(raw_res))
+    except Exception:
+        pass
 
-    # Display
+    # Parse
+    analysis = safe_parse_model(str(raw_res), ScreenAnalysis, _make_fallback_analysis)
+
+    # Repair Retry if parsing failed
+    if analysis.is_raw_error:
+        print(f"{Colors.y('Warning:')} Initial JSON parse failed. Attempting repair...")
+
+        repair_msg = (
+            "The previous output was invalid JSON. Fix this into valid JSON matching the schema. "
+            "Output JSON only.\n\nRAW OUTPUT:\n"
+            f"{analysis.raw_output}"
+        )
+
+        try:
+            repaired_res = ollama_chat_with_images(
+                system_prompt=system_prompt,
+                user_prompt=repair_msg,
+                image_paths=[],
+                model=model_to_use,
+                num_ctx=args.ctx,
+                quality_mode=False,
+            )
+
+            # Update debug raw file with repair output too
+            try:
+                atomic_write_text(txt_path, str(repaired_res))
+            except Exception:
+                pass
+
+            analysis_repaired = safe_parse_model(str(repaired_res), ScreenAnalysis, _make_fallback_analysis)
+
+            if not analysis_repaired.is_raw_error:
+                print(f"{Colors.g('Repair successful.')}")
+                analysis = analysis_repaired
+            else:
+                print(f"{Colors.r('Repair failed.')}")
+        except Exception as e:
+            print(f"{Colors.r('Repair execution failed:')} {e}")
+
+    # Save to cache if valid
+    if not analysis.is_raw_error:
+        try:
+            atomic_write_text(json_path, analysis.model_dump_json())
+            idx[fk] = ck
+            _write_index(idx)
+            atomic_write_text(LAST_JSON, analysis.model_dump_json(indent=2))
+        except Exception as e:
+            print(f"{Colors.y('Warning: could not write cache:')} {e}", file=sys.stderr)
+
     print(_format_cli(analysis))
 
 
