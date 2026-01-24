@@ -6,7 +6,7 @@ import io
 import os
 import time
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Optional
 
 import requests
 from PIL import Image
@@ -14,66 +14,58 @@ from PIL import Image
 from .ollama_utils import resolve_ollama_url
 from .ui import UI
 
+# =============================================================================
+# Paths
+# =============================================================================
+
 BASE_DIR = Path(__file__).resolve().parents[2]
 LOG_DIR = BASE_DIR / "logs"
 
-# ============================================================
-# One-toggle debug
-# ============================================================
-# VLM_DEBUG=1 enables verbose logging (no base64 printed).
-#
-# Endpoint selection:
-# - Default: /api/chat
-# - Set VLM_ENDPOINT=generate to use /api/generate
-# - If the chosen endpoint fails with a clear endpoint error (404/400),
-#   the helper will attempt the other endpoint once per attempt.
-#
-# Resize strategy (scale, not JPEG quality):
-#   * normal mode: 60%, then 50%, 40%, 30%
-#   * quality mode: 90%, then 75%
-#
-# Snap resized dimensions down to a stable multiple (default: 32)
-#
-# Auto num_ctx based on (resized) total pixel load and image count.
-# Capped by DEFAULT_MAX_CTX (env override VLM_MAX_CTX).
-#
-# In debug mode, save the exact JPEG payload sent per attempt into logs/vlm-images
-# Optional: set num_batch to reduce peak memory pressure / fragmentation risk
-#
-# Optional env overrides:
-# - DEFAULT_VLM_MODEL      (default: qwen2.5vl:3b)
-# - VLM_TIMEOUT            (default: 180)
-# - VLM_ENDPOINT           ("chat" | "generate") default: "chat"
-#
-# Encoding env:
-# - VLM_JPEG_QUALITY       (default: 80)
-#
-# Dimension snapping env:
-# - VLM_SNAP_MULT          (default: 32)
-# - VLM_SNAP_MIN           (default: 64)
-#
-# Batch env:
-# - VLM_NUM_BATCH          (default: 64)        # sent as options.num_batch (if > 0)
-# ============================================================
+# =============================================================================
+# Defaults (keep behavior stable)
+# =============================================================================
+
+DEFAULT_VLM_MODEL = "qwen2.5vl:3b"
+DEFAULT_TIMEOUT_S = 180
+DEFAULT_ENDPOINT = "chat"  # ("chat" | "generate")
 
 DEFAULT_JPEG_QUALITY = 80
 DEFAULT_SNAP_MULT = 32
 DEFAULT_SNAP_MIN = 64
+
 DEFAULT_NUM_BATCH = 64
-DEFAULT_MAX_CTX = 8192  # Hard cap for auto-context to prevent OOM on typical GPUs
+DEFAULT_MAX_CTX = 8196  # hard cap for auto-context to prevent OOM on typical GPUs
 
+# =============================================================================
+# Env var names
+# =============================================================================
 
-# -----------------------------
+ENV_DEBUG = "VLM_DEBUG"
+ENV_TIMEOUT = "VLM_TIMEOUT"
+ENV_ENDPOINT = "VLM_ENDPOINT"
+
+ENV_MODEL = "DEFAULT_VLM_MODEL"
+ENV_JPEG_QUALITY = "VLM_JPEG_QUALITY"
+ENV_SNAP_MULT = "VLM_SNAP_MULT"
+ENV_SNAP_MIN = "VLM_SNAP_MIN"
+
+ENV_NUM_BATCH = "VLM_NUM_BATCH"
+ENV_NUM_PREDICT = "VLM_NUM_PREDICT"
+ENV_MAX_CTX = "VLM_MAX_CTX"
+
+# =============================================================================
 # Model config
-# -----------------------------
+# =============================================================================
+
 
 def get_default_vlm_model() -> str:
-    return os.getenv("DEFAULT_VLM_MODEL", "qwen2.5vl:3b")
+    return os.getenv(ENV_MODEL, DEFAULT_VLM_MODEL)
 
 
-# -----------------------------
+# =============================================================================
 # Env helpers
-# -----------------------------
+# =============================================================================
+
 
 def _env_bool(name: str, default: str = "0") -> bool:
     return os.getenv(name, default).strip() == "1"
@@ -96,9 +88,10 @@ def _safe_preview(s: str, limit: int = 300) -> str:
     return s if len(s) <= limit else s[:limit] + "..."
 
 
-# -----------------------------
+# =============================================================================
 # Image helpers
-# -----------------------------
+# =============================================================================
+
 
 def _encode_jpeg_bytes(im: Image.Image, quality: int) -> bytes:
     q = max(30, min(95, int(quality)))
@@ -112,7 +105,7 @@ def _encode_jpeg_b64(im: Image.Image, quality: int) -> str:
 
 
 def _debug_dir() -> Path:
-    d = Path(__file__).resolve().parents[2] / "logs" / "vlm-images"
+    d = BASE_DIR / "logs" / "vlm-images"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -122,7 +115,7 @@ def _save_debug_jpeg(panel: Image.Image, out_path: Path, quality: int) -> None:
     out_path.write_bytes(_encode_jpeg_bytes(panel, quality))
 
 
-def _snap_size(w: int, h: int, *, snap_mult: int, snap_min: int) -> Tuple[int, int]:
+def _snap_size(w: int, h: int, *, snap_mult: int, snap_min: int) -> tuple[int, int]:
     """
     Snap down to stable multiples to avoid backend tiling/assert paths.
     Never upscale due to snapping.
@@ -151,7 +144,6 @@ def _resize_percent_and_snap(im: Image.Image, scale: float, *, snap_mult: int, s
         return im
 
     s = max(0.01, min(1.0, float(scale)))
-
     rw = max(1, int(w * s))
     rh = max(1, int(h * s))
 
@@ -168,18 +160,18 @@ def _resize_percent_and_snap(im: Image.Image, scale: float, *, snap_mult: int, s
 
 
 def _prepare_images_for_vlm(
-    paths: List[Path],
+    paths: list[Path],
     *,
     scale: float,
     debug_save_prefix: Optional[str],
     jpeg_quality: int,
     snap_mult: int,
     snap_min: int,
-) -> Tuple[List[str], List[Tuple[int, int]]]:
+) -> tuple[list[str], list[tuple[int, int]]]:
     debug_dir = _debug_dir() if debug_save_prefix is not None else None
 
-    images_b64: List[str] = []
-    sizes: List[Tuple[int, int]] = []
+    images_b64: list[str] = []
+    sizes: list[tuple[int, int]] = []
 
     for idx, p in enumerate(paths):
         with Image.open(p) as im0:
@@ -201,9 +193,10 @@ def _prepare_images_for_vlm(
     return images_b64, sizes
 
 
-# -----------------------------
-# VLM heuristics
-# -----------------------------
+# =============================================================================
+# Output heuristics
+# =============================================================================
+
 
 def _looks_like_template_leak(content: str) -> bool:
     c = content.strip()
@@ -219,36 +212,13 @@ def _looks_like_template_leak(content: str) -> bool:
     return any(m in c for m in markers)
 
 
-def _pick_num_ctx_from_sizes(sizes: List[Tuple[int, int]]) -> int:
-    """
-    Conservative ctx selection.
-    Goal: avoid Ollama 500s from KV-cache pressure while keeping enough room for vision tokens.
-    """
-    if not sizes:
-        return 4096
-
-    default_ctx = _env_int("VLM_DEFAULT_CTX", 4096)
-    max_ctx = _env_int("VLM_MAX_CTX", DEFAULT_MAX_CTX)
-
-    n_imgs = len(sizes)
-    total_pixels = sum(w * h for w, h in sizes)
-
-    if n_imgs == 1:
-        if total_pixels <= 2_500_000:
-            return min(default_ctx, max_ctx)
-        if total_pixels <= 5_000_000:
-            return min(6144, max_ctx)
-        return min(8192, max_ctx)
-
-    if n_imgs <= 3:
-        if total_pixels <= 4_000_000:
-            return min(6144, max_ctx)
-        return min(8192, max_ctx)
-
-    return min(8192, max_ctx)
+# =============================================================================
+# Error heuristics
+# =============================================================================
 
 
 def _probe_ollama(base_url: str) -> str:
+    # Debug-only helper; keep lightweight.
     try:
         r = requests.get(f"{base_url}/api/version", timeout=5)
         r.raise_for_status()
@@ -284,15 +254,15 @@ def _looks_like_endpoint_mismatch(e: Exception) -> bool:
             except Exception:
                 body = ""
             body_l = body.lower()
-            # Common mismatches across versions/models
             if "unknown field" in body_l or "invalid" in body_l or "messages" in body_l:
                 return True
     return False
 
 
-# -----------------------------
-# Ollama call (adaptive + retry by resize scale)
-# -----------------------------
+# =============================================================================
+# Main entry
+# =============================================================================
+
 
 def ollama_chat_with_images(
     *,
@@ -301,29 +271,37 @@ def ollama_chat_with_images(
     image_paths: list[Path],
     model: str | None = None,
     num_ctx: int | None = None,  # If None, auto-calculated. If set, respected.
-    temperature: float = 0.0,
-    timeout: int = 180,
+    temperature: float = 0.7,
+    top_p: float = 0.8,
+    top_k: int = 20,
+    min_p: float = 0.0,
+    enable_thinking: bool = False,
+    timeout: int = DEFAULT_TIMEOUT_S,
     quality_mode: bool = False,  # "quality" flag: scale ladder 90% then 75%
 ) -> str | Any:
-    debug = _env_bool("VLM_DEBUG")
+    debug = _env_bool(ENV_DEBUG)
     ui = UI(debug=debug)
 
-    timeout = _env_int("VLM_TIMEOUT", timeout)
+    timeout = _env_int(ENV_TIMEOUT, timeout)
 
     base_url = resolve_ollama_url("http://localhost:11434")
     model_name = model or get_default_vlm_model()
 
-    endpoint_pref = _env_str("VLM_ENDPOINT", "chat").lower()
+    endpoint_pref = _env_str(ENV_ENDPOINT, DEFAULT_ENDPOINT).lower()
     if endpoint_pref not in ("chat", "generate"):
-        endpoint_pref = "chat"
+        endpoint_pref = DEFAULT_ENDPOINT
 
-    jpeg_quality = _env_int("VLM_JPEG_QUALITY", DEFAULT_JPEG_QUALITY)
-    snap_mult = _env_int("VLM_SNAP_MULT", DEFAULT_SNAP_MULT)
-    snap_min = _env_int("VLM_SNAP_MIN", DEFAULT_SNAP_MIN)
+    jpeg_quality = _env_int(ENV_JPEG_QUALITY, DEFAULT_JPEG_QUALITY)
+    snap_mult = _env_int(ENV_SNAP_MULT, DEFAULT_SNAP_MULT)
+    snap_min = _env_int(ENV_SNAP_MIN, DEFAULT_SNAP_MIN)
 
-    num_batch = _env_int("VLM_NUM_BATCH", DEFAULT_NUM_BATCH)
+    num_batch = _env_int(ENV_NUM_BATCH, DEFAULT_NUM_BATCH)
     if num_batch <= 0:
         num_batch = 0
+
+    max_ctx = _env_int(ENV_MAX_CTX, DEFAULT_MAX_CTX)
+    if max_ctx <= 0:
+        max_ctx = DEFAULT_MAX_CTX
 
     ui.log(f"[vlm] model={model_name} base_url={base_url} endpoint={endpoint_pref}")
     ui.log(f"[vlm] images={len(image_paths)} timeout={timeout}s temp={temperature}")
@@ -337,12 +315,22 @@ def ollama_chat_with_images(
         options: dict[str, Any] = {
             "num_ctx": effective_num_ctx,
             "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "min_p": min_p,
+            "enable_thinking": enable_thinking,
         }
+
         if current_batch > 0:
             options["num_batch"] = current_batch
+
+        num_predict = _env_int(ENV_NUM_PREDICT, 0)
+        if num_predict > 0:
+            options["num_predict"] = num_predict
+
         return options
 
-    def call_chat(images_b64: List[str], effective_num_ctx: int, current_batch: int) -> str:
+    def call_chat(images_b64: list[str], effective_num_ctx: int, current_batch: int) -> str:
         payload: dict[str, Any] = {
             "model": model_name,
             "messages": [
@@ -369,7 +357,7 @@ def ollama_chat_with_images(
 
         return content if isinstance(content, str) else ""
 
-    def call_generate(images_b64: List[str], effective_num_ctx: int, current_batch: int) -> str:
+    def call_generate(images_b64: list[str], effective_num_ctx: int, current_batch: int) -> str:
         payload: dict[str, Any] = {
             "model": model_name,
             "system": system_prompt,
@@ -396,14 +384,13 @@ def ollama_chat_with_images(
 
         return content if isinstance(content, str) else ""
 
-    # Scale ladders
-    scales: List[float] = [0.90, 0.75] if quality_mode else [0.60, 0.50, 0.40, 0.30]
+    # Scale ladders (unchanged)
+    scales: list[float] = [0.90, 0.75] if quality_mode else [0.60, 0.50, 0.40, 0.30]
 
     last_err: Optional[Exception] = None
-
     current_batch = 0 if num_batch <= 0 else num_batch
 
-    def append_unusable(out: str) -> None:
+    def _append_unusable(out: str) -> None:
         try:
             LOG_DIR.mkdir(parents=True, exist_ok=True)
             with open(LOG_DIR / "unusable_outputs.log", "a", encoding="utf-8") as f:
@@ -415,11 +402,7 @@ def ollama_chat_with_images(
     while scale_idx < len(scales):
         scale = scales[scale_idx]
 
-        if debug:
-            debug_prefix = f"att{scale_idx+1:02d}__scale{int(scale*100):03d}"
-        else:
-            debug_prefix = None
-
+        debug_prefix = f"att{scale_idx+1:02d}__scale{int(scale*100):03d}" if debug else None
         attempt_label = f"s{scale_idx+1}b{current_batch if current_batch else 'Def'}"
 
         try:
@@ -442,17 +425,17 @@ def ollama_chat_with_images(
             effective_num_ctx = num_ctx
             ui.log(f"[vlm] {attempt_label} scale={scale:.2f} using explicit num_ctx={effective_num_ctx}")
         else:
-            effective_num_ctx = _pick_num_ctx_from_sizes(sizes)
+            effective_num_ctx = max_ctx
             ui.log(
                 f"[vlm] {attempt_label} scale={scale:.2f} "
                 f"imgs={len(images_b64)} sizes={sizes} => num_ctx={effective_num_ctx}"
             )
 
-        # Choose endpoint order for this attempt
-        if endpoint_pref == "chat":
-            call_order = [("chat", call_chat), ("generate", call_generate)]
-        else:
-            call_order = [("generate", call_generate), ("chat", call_chat)]
+        # Endpoint preference + one-time fallback (unchanged)
+        call_order = [("chat", call_chat), ("generate", call_generate)] if endpoint_pref == "chat" else [
+            ("generate", call_generate),
+            ("chat", call_chat),
+        ]
 
         out: Optional[str] = None
         endpoint_err: Optional[Exception] = None
@@ -466,7 +449,7 @@ def ollama_chat_with_images(
                 endpoint_err = e
                 ui.warn(f"[vlm] {endpoint_name} failed: {type(e).__name__}: {e}")
 
-                # Only try the other endpoint if it looks like an endpoint/schema mismatch.
+                # Only try the other endpoint if it looks like mismatch.
                 if not _looks_like_endpoint_mismatch(e):
                     break
 
@@ -493,7 +476,7 @@ def ollama_chat_with_images(
             last_err = RuntimeError(f"VLM returned unusable output: {_safe_preview(out, 200)!r}")
             ui.warn("[vlm] output unusable (empty/template). trying smaller resize scale ...")
             ui.err(f"[vlm] Full response: {out}")
-            append_unusable(out)
+            _append_unusable(out)
             scale_idx += 1
             continue
 

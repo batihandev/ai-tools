@@ -31,36 +31,11 @@ from scripts.helper.ollama_utils import resolve_ollama_url
 import httpx
 
 # Single source of truth for STT
-from scripts.voice_capture import transcribe_file
+from scripts.voice_capture import transcribe_file, convert_to_wav
 
 load_dotenv()
 
 OLLAMA_URL = resolve_ollama_url("http://localhost:11434")
-
-
-def to_wav_16k_mono(src_path: str, dst_path: str) -> None:
-    """
-    Convert browser-recorded audio (webm/ogg/etc.) to 16kHz mono WAV.
-    Requires ffmpeg installed in WSL: sudo apt install -y ffmpeg
-    """
-    p = subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-i", src_path,
-            "-ac", "1",
-            "-ar", "16000",
-            "-vn",
-            dst_path,
-        ],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    if p.returncode != 0:
-        err = (p.stderr or "").strip()
-        raise subprocess.CalledProcessError(p.returncode, p.args, output=None, stderr=err)
 
 
 @asynccontextmanager
@@ -129,7 +104,6 @@ async def get_teacher_modes():
     ]
 
 
-
 @app.post("/api/voice/transcribe", response_model=TranscriptCreateOut)
 async def transcribe_voice(
     audio: Annotated[UploadFile, File(...)],
@@ -158,7 +132,8 @@ async def transcribe_voice(
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as wtmp:
             wav_tmp_path = wtmp.name
 
-        to_wav_16k_mono(src_tmp_path, wav_tmp_path)
+        # Use shared utility from voice_capture
+        convert_to_wav(src_tmp_path, wav_tmp_path)
 
         raw_text, literal_text, meta = transcribe_file(wav_tmp_path)
 
@@ -171,9 +146,10 @@ async def transcribe_voice(
                 detail="Empty transcription (no speech detected)",
             )
 
-    except subprocess.CalledProcessError as e:
-        detail = (getattr(e, "stderr", "") or "").strip() or str(e)
-        raise HTTPException(status_code=500, detail=f"Audio decode failed (ffmpeg): {detail}")
+    except RuntimeError as e:
+        # Voice capture utility raises RuntimeError for ffmpeg failures
+        detail = str(e)
+        raise HTTPException(status_code=500, detail=f"Audio decode failed: {detail}")
 
     except Exception as e:
         traceback.print_exc()
@@ -226,6 +202,7 @@ async def list_transcripts(
         for r in rows
     ]
 
+
 @app.post("/api/english/teach", response_model=TeachOut)
 async def english_teach(payload: TeachIn, db: AsyncSession = Depends(get_db)):
     text = (payload.text or "").strip()
@@ -268,6 +245,7 @@ async def english_teach(payload: TeachIn, db: AsyncSession = Depends(get_db)):
 
     return TeachOut(**out_data)
 
+
 @app.get("/api/english/history", response_model=list[TeacherReplyOut])
 async def english_history(limit: int = 50, db: AsyncSession = Depends(get_db)):
     limit = max(1, min(limit, 200))
@@ -285,6 +263,7 @@ async def english_history(limit: int = 50, db: AsyncSession = Depends(get_db)):
         )
         for r in rows
     ]
+
 
 @app.post("/api/chat/save", response_model=ChatOut)
 async def chat_save(payload: ChatSaveIn, db: AsyncSession = Depends(get_db)):
