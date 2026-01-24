@@ -395,7 +395,13 @@ def main() -> None:
 
     # Prepare logic
     prompt = build_prompt(len(src_imgs))
-    model_sig = args.model or "default"
+    
+    # Resolve model: CLI arg > SCREEN_EXPLAIN_MODEL > None (falls back to global default in VLM)
+    model_to_use = args.model or os.getenv("SCREEN_EXPLAIN_MODEL")
+    if model_to_use and not model_to_use.strip():
+        model_to_use = None
+        
+    model_sig = model_to_use or "default"
     if args.ctx:
         model_sig += f"|ctx={args.ctx}"
 
@@ -433,7 +439,7 @@ def main() -> None:
         return ollama_chat_with_images(
             user_prompt=prompt,
             image_paths=mirrored_imgs,
-            model=args.model,
+            model=model_to_use,
             num_ctx=args.ctx,
             quality_mode=args.quality,
         )

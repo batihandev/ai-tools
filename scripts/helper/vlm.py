@@ -36,7 +36,7 @@ LOG_DIR = BASE_DIR / "logs"
 # - Optional: set num_batch to reduce peak memory pressure / fragmentation risk
 #
 # Optional env overrides:
-# - VLM_MODEL              (default: qwen2.5vl:3b)
+# - DEFAULT_VLM_MODEL      (default env: qwen2.5vl:7b)
 # - VLM_TIMEOUT            (default: 180)
 #
 # Encoding env:
@@ -69,10 +69,7 @@ DEFAULT_MAX_CTX = 8192  # Cap auto-context to prevent OOM on typical GPUs
 # -----------------------------
 
 def get_default_vlm_model() -> str:
-    override = os.getenv("OVERRIDE_VLM_MODEL")
-    if override and override.strip():
-        return override.strip()
-    return os.getenv("VLM_MODEL", "qwen2.5vl:3b")
+    return os.getenv("DEFAULT_VLM_MODEL", "qwen2.5vl:3b")
 
 
 # -----------------------------

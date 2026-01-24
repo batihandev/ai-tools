@@ -639,7 +639,7 @@ def call_model(system_prompt: str, user_prompt: str, label: str) -> str:
         raw = ollama_chat(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            model=os.getenv("INVESTIGATE_MODEL"),
+            model=os.getenv("EXPLAIN_MODEL"),
             num_ctx=16000,
             timeout=180,
         )

@@ -10,18 +10,18 @@ from .ollama_utils import resolve_ollama_url
 def resolve_model(requested_model: Optional[str] = None) -> str:
     """
     Resolve model with priority:
-      1) OVERRIDE_LLM_MODEL (global override)
-      2) requested_model (from specific tool env var)
+      1) requested_model (from specific tool env var)
+      2) DEFAULT_LLM_MODEL (global default)
       3) fallback "llama3.1:8b"
     """
-    # 1. Global Override
-    override = os.getenv("OVERRIDE_LLM_MODEL")
-    if override and override.strip():
-        return override.strip()
-
-    # 2. Requested Model (e.g. tool specific)
+    # 1. Requested Model (e.g. tool specific)
     if requested_model and requested_model.strip():
         return requested_model.strip()
+
+    # 2. Global Default
+    default_model = os.getenv("DEFAULT_LLM_MODEL")
+    if default_model and default_model.strip():
+        return default_model.strip()
 
     # 3. Fallback
     return "llama3.1:8b"

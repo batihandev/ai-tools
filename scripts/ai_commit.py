@@ -52,7 +52,7 @@ class CommitData(BaseModel):
 @dataclass(frozen=True)
 class CommitCfg:
     model: Optional[str] = os.getenv("AI_COMMIT_MODEL")
-    num_ctx: int = 8192
+    num_ctx: int = 4096
     timeout: int = 120
     temperature: float = 0.2
     cwd: str = os.environ.get("USER_PWD", os.getcwd())
