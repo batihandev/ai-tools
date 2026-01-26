@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChatMsg, TeacherMode } from "./useTeacherChat";
 import { Card } from "./ui";
 import { ModeIndicator } from "./ModeIndicator";
@@ -11,6 +11,7 @@ export function TeacherChatCard(props: {
   onClear(): void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [unloading, setUnloading] = useState(false);
 
   // Auto-scroll to bottom when messages change or aiTyping toggles on.
   useEffect(() => {
@@ -18,6 +19,19 @@ export function TeacherChatCard(props: {
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [props.messages.length, props.aiTyping]);
+
+  const handleUnload = async () => {
+    setUnloading(true);
+    try {
+      const resp = await fetch("/api/omni/unload", { method: "DELETE" });
+      const data = await resp.json();
+      alert(data.message || "Model unloaded");
+    } catch {
+      alert("Failed to unload model");
+    } finally {
+      setUnloading(false);
+    }
+  };
 
   return (
     <Card
@@ -28,6 +42,14 @@ export function TeacherChatCard(props: {
             currentMode={props.currentMode}
             onClick={props.onModeSettingsClick}
           />
+          <button
+            onClick={handleUnload}
+            disabled={unloading}
+            className="rounded-lg border border-red-500/30 px-3 py-2 text-sm font-medium text-red-400 hover:bg-red-500/10 disabled:opacity-50 dark:border-red-500/30 dark:text-red-400"
+            title="Unload model to free VRAM"
+          >
+            {unloading ? "..." : "Unload"}
+          </button>
           <button
             onClick={props.onClear}
             className="rounded-lg border border-zinc-200 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
@@ -63,6 +85,15 @@ export function TeacherChatCard(props: {
                   }
                 >
                   {m.text}
+                  {m.role === "assistant" && m.audio_path && (
+                    <div className="mt-2">
+                      <audio
+                        controls
+                        src={m.audio_path}
+                        className="h-8 w-full max-w-[200px]"
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

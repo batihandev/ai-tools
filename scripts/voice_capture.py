@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-voice-capture — local speech-to-text using faster-whisper.
+voice-capture — local speech-to-text using Qwen2.5-Omni.
 
 USAGE
   # 1) Transcribe an existing audio file
@@ -35,13 +35,10 @@ from typing import Optional, Tuple, Dict, Any
 
 from .helper.colors import Colors
 
-from faster_whisper import WhisperModel
+# from faster_whisper import WhisperModel
+
 
 _PUNCT_RE = re.compile(r"[^\w\s']+", re.UNICODE)  # keep apostrophes in contractions
-
-_model_singleton: WhisperModel | None = None
-_model_sig: tuple[str, str, str] | None = None  # (model_name, device, compute_type)
-
 
 @dataclass(frozen=True)
 class Args:
@@ -55,17 +52,6 @@ class Args:
     text_mode: str          # "json" | "raw" | "literal"
 
 
-def _get_model(model_name: str, device: str, compute_type: str) -> WhisperModel:
-    """
-    Keep a singleton model in-process (FastAPI benefits a lot).
-    If settings change, re-initialize.
-    """
-    global _model_singleton, _model_sig
-    sig = (model_name, device, compute_type)
-    if _model_singleton is None or _model_sig != sig:
-        _model_singleton = WhisperModel(model_name, device=device, compute_type=compute_type)
-        _model_sig = sig
-    return _model_singleton
 
 
 def literalize(text: str) -> str:
@@ -104,6 +90,8 @@ def convert_to_wav(src_path: str, dst_path: str, sample_rate: int = 16000) -> No
         raise RuntimeError("ffmpeg not found. Please install it (e.g., sudo apt install ffmpeg).")
 
 
+from .helper.omni_helper import OmniHelper
+
 def transcribe_file(
     audio_path: str,
     *,
@@ -113,40 +101,24 @@ def transcribe_file(
     compute_type: str | None = None,
 ) -> Tuple[str, str, Dict[str, Any]]:
     """
-    Import-friendly transcription API.
+    Import-friendly transcription API using Qwen2.5-Omni.
 
     Returns: (raw_text, literal_text, meta)
     """
-    model_name = model_name or os.getenv("WHISPER_MODEL", "small")
-    lang = lang if lang is not None else (os.getenv("WHISPER_LANG", "en") or None)
-    device = device or os.getenv("WHISPER_DEVICE", "cpu")
-    compute_type = compute_type or os.getenv("WHISPER_COMPUTE_TYPE", "int8")
+    # Use OmniHelper for transcription
+    try:
+        raw_text = OmniHelper.transcribe(audio_path)
+    except Exception as e:
+        print(f"{Colors.r('Omni ASR Error:')} {e}", file=sys.stderr)
+        raise
 
-    m = _get_model(model_name, device=device, compute_type=compute_type)
-
-    segments, info = m.transcribe(
-        audio_path,
-        language=lang,
-        vad_filter=True,     # removes long silences (does not rewrite text)
-        beam_size=1,         # fast; raise for accuracy if you want
-        best_of=1,
-        temperature=0.0,
-    )
-
-    raw_parts: list[str] = []
-    for s in segments:
-        t = (s.text or "").strip()
-        if t:
-            raw_parts.append(t)
-
-    raw_text = " ".join(raw_parts).strip()
     literal_text = literalize(raw_text)
 
     meta: Dict[str, Any] = {
         "audio": audio_path,
-        "language": getattr(info, "language", None),
-        "duration": getattr(info, "duration", None),
-        "model": model_name,
+        "language": lang,
+        "duration": None,
+        "model": os.getenv("OMNI_MODEL", "Qwen/Qwen2.5-Omni-3B"),
         "device": device,
         "compute_type": compute_type,
     }

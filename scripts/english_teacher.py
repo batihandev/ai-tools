@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import uuid
+from pathlib import Path
 from dataclasses import dataclass
 from textwrap import dedent
 from typing import List, Optional
@@ -12,7 +14,7 @@ from pydantic import BaseModel, Field
 
 # IMPORTANT: relative imports (works when imported as scripts.english_teacher)
 from .helper.env import load_repo_dotenv
-from .helper.llm import ollama_chat
+from .helper.omni_helper import OmniHelper
 from .helper.spinner import with_spinner
 from .helper.colors import Colors
 from .helper.json_utils import safe_parse_model
@@ -59,6 +61,7 @@ class TeachOut(BaseModel):
     follow_up_question: str = ""
     raw_error: bool = False
     raw_output: str = ""
+    audio_path: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -206,6 +209,7 @@ def _make_fallback_teachout(raw: str) -> TeachOut:
         follow_up_question="",
         raw_error=True,
         raw_output=raw,
+        audio_path=None,
     )
 
 
@@ -213,7 +217,12 @@ def _make_fallback_teachout(raw: str) -> TeachOut:
 # Public API (importable)
 # -----------------------------------------------------------------------------
 
-def teach(text: str, mode: str = DEFAULT_MODE, cfg: Optional[TeachCfg] = None) -> TeachOut:
+def teach(
+    text: str,
+    mode: str = DEFAULT_MODE,
+    cfg: Optional[TeachCfg] = None,
+    session_id: Optional[str] = None,
+) -> TeachOut:
     """
     Core function for FastAPI and CLI usage.
 
@@ -221,6 +230,7 @@ def teach(text: str, mode: str = DEFAULT_MODE, cfg: Optional[TeachCfg] = None) -
         text: user utterance(s). You will likely pass combined transcripts.
         mode: coach|strict|correct
         cfg: optional configuration overrides (model/ctx/timeout/temperature/top_p).
+        session_id: optional session ID for conversation memory across turns.
     """
     if cfg is None:
         cfg = TeachCfg(mode=mode)
@@ -228,19 +238,92 @@ def teach(text: str, mode: str = DEFAULT_MODE, cfg: Optional[TeachCfg] = None) -
     if mode not in ("coach", "strict", "correct"):
         mode = "coach"
 
+    # Import helpers here to avoid circular imports
+    from .helper.cache_helper import CorrectionCache
+    from .helper.session_store import SessionStore
+
+    # Check cache first (text corrections only, audio regenerated)
+    cached = CorrectionCache.get(text, mode)
+    if cached:
+        # Regenerate audio for fresh tone variation
+        out = cached.model_copy()
+        
+        # Generate fresh audio
+        repo_root = Path(__file__).resolve().parents[1]
+        public_audio_dir = repo_root / "frontend" / "public" / "audios"
+        public_audio_dir.mkdir(parents=True, exist_ok=True)
+        
+        filename = f"{uuid.uuid4().hex}.wav"
+        abs_audio_path = str(public_audio_dir / filename)
+        rel_audio_path = f"/audios/{filename}"
+        
+        # Generate audio for the cached response
+        audio_text = out.reply
+        if out.follow_up_question:
+            audio_text = f"{audio_text} {out.follow_up_question}"
+        
+        if audio_text.strip():
+            try:
+                OmniHelper.chat_with_audio(
+                    text=audio_text,
+                    output_audio_path=abs_audio_path,
+                )
+                out.audio_path = rel_audio_path
+            except Exception:
+                pass  # Continue without audio on failure
+        
+        # Update session if provided
+        if session_id:
+            SessionStore.add_exchange(session_id, text, out)
+        
+        return out
+
+    # Get conversation history if session_id provided
+    history = []
+    if session_id:
+        history = SessionStore.get_history(session_id, max_turns=3)
+
     system_prompt = _build_system_prompt(mode)
     user_prompt = _build_user_prompt(text)
 
-    raw = ollama_chat(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        model=cfg.model,
-        num_ctx=cfg.num_ctx,
-        timeout=cfg.timeout,
-        temperature=cfg.temperature,
-        top_p=cfg.top_p,
-    )
-    return safe_parse_model(raw, TeachOut, _make_fallback_teachout)
+    # Prepare audio output path
+    repo_root = Path(__file__).resolve().parents[1]
+    public_audio_dir = repo_root / "frontend" / "public" / "audios"
+    public_audio_dir.mkdir(parents=True, exist_ok=True)
+    
+    filename = f"{uuid.uuid4().hex}.wav"
+    abs_audio_path = str(public_audio_dir / filename)
+    rel_audio_path = f"/audios/{filename}"
+    
+    try:
+        # Use OmniHelper for unified LLM + TTS response
+        # Note: Use 'persona' (prepended to user message) instead of system_prompt
+        # because Qwen2.5-Omni requires a specific system prompt for TTS to work
+        result = OmniHelper.chat_with_audio(
+            text=f"{system_prompt}\n\n{user_prompt}",
+            persona="English Teacher",
+            output_audio_path=abs_audio_path,
+            history=history,
+        )
+        raw = result["text"]
+    except Exception as e:
+        print(f"{Colors.r('Omni Error:')} {e}", file=sys.stderr)
+        return _make_fallback_teachout(f"Error: {e}")
+    
+    out = safe_parse_model(raw, TeachOut, _make_fallback_teachout)
+    
+    # Set audio path if generated
+    if result.get("audio_path"):
+        out.audio_path = rel_audio_path
+
+    # Cache the text correction (without audio)
+    CorrectionCache.set(text, mode, out)
+
+    # Update session history
+    if session_id:
+        SessionStore.add_exchange(session_id, text, out)
+            
+    return out
 
 
 # -----------------------------------------------------------------------------

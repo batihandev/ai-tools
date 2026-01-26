@@ -42,3 +42,7 @@ test: install
 lint:
 	@echo "Linting..."
 	@$(VENV_DIR)/bin/ruff check scripts/ tests/
+
+model-audio: install
+	@echo "Downloading Qwen2.5-Omni audio models (ASR, LLM, TTS)..."
+	@$(VENV_DIR)/bin/python -m scripts.download_audio_models

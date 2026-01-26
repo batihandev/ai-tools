@@ -2,7 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export type ChatMsg =
   | { id: string; role: "user"; text: string; ts: number }
-  | { id: string; role: "assistant"; text: string; ts: number };
+  | {
+      id: string;
+      role: "assistant";
+      text: string;
+      ts: number;
+      audio_path?: string;
+    };
 
 export type TeacherMode = "coach" | "strict" | "correct";
 
@@ -15,6 +21,7 @@ type TeachOut = {
   follow_up_question: string;
   raw_error?: boolean;
   raw_output?: string;
+  audio_path?: string;
 };
 
 type ApiError = { detail?: string };
@@ -27,6 +34,7 @@ type ChatGetOut = {
     role: "user" | "assistant";
     text: string;
     ts?: number;
+    audio_path?: string;
   }>;
 };
 
@@ -90,7 +98,7 @@ export function useTeacherChat(opts?: {
         }
       }, 600);
     },
-    [chatKey]
+    [chatKey],
   );
 
   const setMessagesAndSave = useCallback(
@@ -101,7 +109,7 @@ export function useTeacherChat(opts?: {
         return next;
       });
     },
-    [scheduleSave]
+    [scheduleSave],
   );
 
   // Optional: load existing chat state on mount (or when key changes)
@@ -114,7 +122,7 @@ export function useTeacherChat(opts?: {
     (async () => {
       try {
         const resp = await fetch(
-          `/api/chat/get?chat_key=${encodeURIComponent(chatKey)}`
+          `/api/chat/get?chat_key=${encodeURIComponent(chatKey)}`,
         );
         if (!resp.ok) return;
         const out = await readJson<ChatGetOut>(resp);
@@ -125,6 +133,8 @@ export function useTeacherChat(opts?: {
           role: m.role,
           text: m.text,
           ts: typeof m.ts === "number" ? m.ts : nowTs(),
+          audio_path:
+            m.role === "assistant" ? (m as any).audio_path : undefined,
         }));
         setMessages(loaded);
       } catch {
@@ -149,7 +159,7 @@ export function useTeacherChat(opts?: {
 
       pendingRef.current.push(t);
     },
-    [setMessagesAndSave]
+    [setMessagesAndSave],
   );
 
   const formatAiMessage = useCallback((out: TeachOut) => {
@@ -239,7 +249,13 @@ export function useTeacherChat(opts?: {
 
       setMessagesAndSave((prev) => [
         ...prev,
-        { id: uid("a"), role: "assistant", text: msg, ts: nowTs() },
+        {
+          id: uid("a"),
+          role: "assistant",
+          text: msg,
+          ts: nowTs(),
+          audio_path: out.audio_path,
+        },
       ]);
     } catch (e) {
       console.error("Teacher chat error:", e);
@@ -272,7 +288,7 @@ export function useTeacherChat(opts?: {
         flushIfPossible().catch(() => {});
       }
     },
-    [appendUser, flushIfPossible]
+    [appendUser, flushIfPossible],
   );
 
   const aiTyping = useMemo(() => aiStatus === "waiting", [aiStatus]);

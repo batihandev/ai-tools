@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, WebSocket
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
@@ -301,3 +301,46 @@ async def chat_get(chat_key: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Chat not found")
 
     return ChatOut(chat_key=row.chat_key, updated_at=row.updated_at, messages=row.messages or [])
+
+
+# -----------------------------------------------------------------------------
+# WebSocket: Real-time voice streaming
+# -----------------------------------------------------------------------------
+
+@app.websocket("/ws/voice/{session_id}")
+async def voice_ws(websocket: WebSocket, session_id: str, mode: str = "coach"):
+    """
+    WebSocket endpoint for real-time voice conversation.
+    
+    Protocol:
+    - Client sends audio chunks (raw PCM, 16-bit mono, 16kHz)
+    - Server detects speech end via VAD
+    - Server returns JSON text response + binary audio response
+    """
+    from scripts.ws_voice import voice_stream_handler
+    await voice_stream_handler(websocket, session_id, mode)
+
+
+# -----------------------------------------------------------------------------
+# Model Control: Unload to free VRAM
+# -----------------------------------------------------------------------------
+
+class UnloadModelOut(BaseModel):
+    success: bool
+    message: str
+
+
+@app.delete("/api/omni/unload", response_model=UnloadModelOut)
+async def unload_omni_model():
+    """
+    Unload the Omni model to free VRAM/RAM.
+    
+    Use this when you're done with voice features and want to reclaim GPU memory.
+    The model will be reloaded automatically on the next request.
+    """
+    try:
+        from scripts.helper.omni_helper import unload_model
+        unload_model()
+        return UnloadModelOut(success=True, message="Model unloaded. VRAM freed.")
+    except Exception as e:
+        return UnloadModelOut(success=False, message=f"Unload failed: {e}")

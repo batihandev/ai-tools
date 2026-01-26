@@ -4,16 +4,23 @@ pillow
 faster-whisper
 fastapi
 uvicorn[standard]
-python-dotenv
 sqlalchemy>=2.0
 asyncpg
 pydantic>=2
 pydantic-settings
-faster-whisper
 python-multipart
-onnxruntime
-onnxruntime-gpu
 httpx
+huggingface_hub
+transformers>=4.40
+accelerate
+torchvision
+bitsandbytes
+soundfile
+qwen_omni_utils
+
+# Voice Activity Detection
+# NOTE: pyaudio requires system package: sudo apt install portaudio19-dev
+pyaudio
 
 # Testing & Linting
 pytest

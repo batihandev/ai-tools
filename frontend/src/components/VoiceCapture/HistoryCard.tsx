@@ -146,6 +146,16 @@ export function HistoryCard(props: { history: Transcript[] }) {
                       {corrected ? `Corrected: ${corrected}\n\n` : ""}
                       {replyText ? `Reply: ${replyText}` : ""}
                     </div>
+                    {typeof output?.audio_path === "string" &&
+                      output.audio_path && (
+                        <div className="mt-2">
+                          <audio
+                            controls
+                            src={output.audio_path}
+                            className="h-8 w-full max-w-[200px]"
+                          />
+                        </div>
+                      )}
                   </div>
                 )}
               </div>
