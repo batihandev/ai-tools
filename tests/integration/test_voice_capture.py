@@ -85,23 +85,29 @@ class TestTranscribeFile:
 
     @patch("scripts.voice_capture._get_model")
     def test_transcribe_returns_tuple(self, mock_get_model):
-        """transcribe_file should return (raw_text, literal_text, meta)."""
+        """transcribe_file should return (raw_text, literal_text, segments, meta)."""
         from scripts.voice_capture import transcribe_file
 
         # Mock the Whisper model
         mock_model = MagicMock()
         mock_segment = MagicMock()
         mock_segment.text = "Hello, world!"
+        mock_segment.start = 0.0
+        mock_segment.end = 1.0
+        mock_segment.words = [] # empty words
+        
         mock_info = MagicMock()
         mock_info.language = "en"
         mock_info.duration = 2.5
         mock_model.transcribe.return_value = ([mock_segment], mock_info)
         mock_get_model.return_value = mock_model
 
-        raw, literal, meta = transcribe_file("/tmp/test.wav")
+        raw, literal, segments, meta = transcribe_file("/tmp/test.wav")
 
         assert raw == "Hello, world!"
         assert literal == "hello world"
+        assert len(segments) == 1
+        assert segments[0]["text"] == "Hello, world!"
         assert meta["language"] == "en"
         assert meta["duration"] == 2.5
 
@@ -117,7 +123,8 @@ class TestTranscribeFile:
         mock_model.transcribe.return_value = ([], mock_info)
         mock_get_model.return_value = mock_model
 
-        raw, literal, meta = transcribe_file("/tmp/empty.wav")
+        raw, literal, segments, meta = transcribe_file("/tmp/empty.wav")
 
         assert raw == ""
         assert literal == ""
+        assert segments == []

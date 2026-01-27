@@ -9,10 +9,34 @@ from pydantic import BaseModel, Field
 # ----------------------------
 # Transcripts
 # ----------------------------
+
+class PhoneIssue(BaseModel):
+    phone: str
+    score: float
+    alt: str | None = None
+    alt_score: float | None = None
+
+
+class WordScore(BaseModel):
+    word: str
+    start: float
+    end: float
+    score: float
+    risk: str
+    issues: list[PhoneIssue] = Field(default_factory=list)
+
+
+class PronScoreOut(BaseModel):
+    overall_score: float
+    overall_risk: str
+    words: list[WordScore]
+
+
 class TranscriptCreateOut(BaseModel):
     id: int
     raw_text: str
     literal_text: str
+    pronunciation: PronScoreOut | None = None
 
 
 class TranscriptOut(BaseModel):
@@ -44,6 +68,7 @@ class TeachIn(BaseModel):
     text: str = Field(min_length=1)
     mode: str | None = Field(default=None)
     chat_key: str = Field(min_length=6, max_length=64)
+    pronunciation_risks: list[dict[str, Any]] | None = Field(default=None)
 
 
 class TeachOut(BaseModel):

@@ -11,6 +11,7 @@ const DEFAULT_THRESHOLD = 0.014;
 export type VoiceCaptureState = {
   // UI state
   isListening: boolean;
+  isPaused: boolean;
   status: string;
   showAdvanced: boolean;
 
@@ -34,7 +35,11 @@ export type VoiceCaptureState = {
 
   startListening(): Promise<void>;
   stopAll(): void;
+  pauseListening(): void;
+  resumeListening(): void;
   refreshHistory(): Promise<void>;
+
+  lastAudioBlob: Blob | null;
 };
 
 type UseVoiceCaptureOpts = {
@@ -49,15 +54,20 @@ type TranscribeApiOk = {
   id: number;
   raw_text: string;
   literal_text: string;
+  pronunciation?: any; // typed looser internally to avoid circular dep or big import, but runtime is fine.
+  // Actually we imported LatestResult which has PronScoreOut in types.ts, so we can use that if we want,
+  // but TranscribeApiOk is defined here. Let's just say it returns same shape.
 };
 
 type ApiErr = { detail?: string };
 
 export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
   const [isListening, setIsListening] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [status, setStatus] = useState("Idle");
   const [latest, setLatest] = useState<LatestResult | null>(null);
   const [history, setHistory] = useState<Transcript[]>([]);
+  const [lastAudioBlob, setLastAudioBlob] = useState<Blob | null>(null);
 
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [silenceMs, _setSilenceMs] = useState(DEFAULT_SILENCE_MS);
@@ -80,6 +90,11 @@ export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
   useEffect(() => {
     isListeningRef.current = isListening;
   }, [isListening]);
+
+  const isPausedRef = useRef(false);
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+  }, [isPaused]);
 
   const onNewTranscriptRef = useRef<UseVoiceCaptureOpts["onNewTranscript"]>(
     opts?.onNewTranscript,
@@ -142,6 +157,7 @@ export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
         id: out.id,
         raw_text: out.raw_text ?? "",
         literal_text: out.literal_text ?? "",
+        pronunciation: out.pronunciation,
       };
 
       // IMPORTANT: use the ref, not opts directly
@@ -195,16 +211,18 @@ export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
       // Ignore accidental ultra-short chunks (common on stop/start)
       if (blob.size < 4096) {
         console.log(`Skipping tiny blob: ${blob.size} bytes`);
-        if (isListeningRef.current) startNewRecorder();
+        if (isListeningRef.current && !isPausedRef.current) startNewRecorder();
         return;
       }
 
       if (!sawVoiceRef.current) {
         console.log("Skipping upload: no speech detected in this chunk");
-        if (isListeningRef.current) startNewRecorder();
+        if (isListeningRef.current && !isPausedRef.current) startNewRecorder();
         else setStatus("Idle (no speech detected)");
         return;
       }
+
+      setLastAudioBlob(blob);
 
       // Log blob info for debugging
       console.log(
@@ -219,7 +237,7 @@ export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
           `Error: ${err instanceof Error ? err.message : "Upload failed"}`,
         );
       } finally {
-        if (isListeningRef.current) startNewRecorder();
+        if (isListeningRef.current && !isPausedRef.current) startNewRecorder();
       }
     };
 
@@ -276,6 +294,7 @@ export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
   const startListening = useCallback(async () => {
     setStatus("Requesting microphone…");
     setLatest(null);
+    setLastAudioBlob(null);
 
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     streamRef.current = stream;
@@ -363,14 +382,34 @@ export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
     [],
   );
 
+  // Pause/resume listening (for audio playback)
+  const pauseListening = useCallback(() => {
+    if (!isListening) return;
+    setIsPaused(true);
+    // Stop the current recorder but keep stream alive
+    if (recorderRef.current && recorderRef.current.state === "recording") {
+      recorderRef.current.stop();
+    }
+    setStatus("Paused");
+  }, [isListening]);
+
+  const resumeListening = useCallback(() => {
+    if (!isListening || !isPaused) return;
+    setIsPaused(false);
+    startNewRecorder();
+    setStatus("Listening…");
+  }, [isListening, isPaused, startNewRecorder]);
+
   return {
     isListening,
+    isPaused,
     status,
     showAdvanced,
     silenceMs,
     threshold,
     latest,
     history,
+    lastAudioBlob,
     statusPillClass,
     rmsTooltip,
     setShowAdvanced,
@@ -379,6 +418,8 @@ export function useVoiceCapture(opts?: UseVoiceCaptureOpts): VoiceCaptureState {
     resetDefaults,
     startListening,
     stopAll,
+    pauseListening,
+    resumeListening,
     refreshHistory,
   };
 }

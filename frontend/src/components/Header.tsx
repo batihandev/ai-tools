@@ -1,5 +1,5 @@
 import { type Theme, toggleTheme } from "../lib/theme";
-import { useOllamaStatus } from "../hooks/useOllamaStatus";
+import { useBackendStatus } from "../hooks/useBackendStatus";
 
 export type NavKey = "voice" | "tools" | "settings";
 
@@ -10,7 +10,7 @@ export function Header(props: {
   setTheme: (t: Theme) => void;
 }) {
   const { active, onNav, theme, setTheme } = props;
-  const { status: ollamaStatus, url: ollamaUrl } = useOllamaStatus();
+  const { status, details } = useBackendStatus();
 
   const linkClass = (k: NavKey) =>
     [
@@ -22,17 +22,19 @@ export function Header(props: {
 
   const statusColor = {
     online: "bg-emerald-500",
-    offline: "bg-red-500",
-    error: "bg-yellow-500",
+    "backend-offline": "bg-red-500",
+    "ollama-offline": "bg-amber-500",
+    error: "bg-red-500",
     checking: "bg-zinc-400",
-  }[ollamaStatus];
+  }[status];
 
   const statusText = {
-    online: "Ollama Online",
-    offline: "Ollama Offline",
-    error: "Ollama Error",
+    online: "Online",
+    "backend-offline": "Backend Offline",
+    "ollama-offline": "Ollama Offline",
+    error: "Backend Error",
     checking: "Checking...",
-  }[ollamaStatus];
+  }[status];
 
   return (
     <header className="sticky top-0 z-20 border-b border-zinc-200/70 bg-white/80 backdrop-blur dark:border-zinc-800/70 dark:bg-zinc-950/80">
@@ -67,7 +69,7 @@ export function Header(props: {
 
           <div
             className="flex items-center gap-2 rounded-md px-3 py-2 text-xs"
-            title={`${statusText}\n${ollamaUrl}`}
+            title={details}
           >
             <div className={`h-2 w-2 rounded-full ${statusColor}`} />
             <span className="text-zinc-600 dark:text-zinc-400">

@@ -15,6 +15,12 @@ onnxruntime
 onnxruntime-gpu
 httpx
 
+# Pronunciation Analysis
+praat-parselmouth
+praatio
+g2p-en
+edge-tts
+
 # Testing & Linting
 pytest
 pytest-mock

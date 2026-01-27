@@ -32,6 +32,8 @@ import httpx
 
 # Single source of truth for STT
 from scripts.voice_capture import transcribe_file, convert_to_wav
+from scripts.pron_score import measure_pronunciation
+from scripts.tts import generate_word_pronunciation
 
 load_dotenv()
 
@@ -104,6 +106,30 @@ async def get_teacher_modes():
     ]
 
 
+class TTSRequest(BaseModel):
+    word: str
+    accent: str = "us"  # us, uk, au
+
+
+@app.post("/api/tts/pronounce")
+async def pronounce_word(req: TTSRequest):
+    """Generate pronunciation audio for a word using Edge TTS."""
+    from fastapi.responses import Response
+    
+    if not req.word.strip():
+        raise HTTPException(status_code=400, detail="Missing word")
+    
+    try:
+        audio_bytes = generate_word_pronunciation(req.word.strip(), req.accent)
+        return Response(
+            content=audio_bytes,
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": f"inline; filename={req.word}.mp3"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"TTS failed: {e}")
+
+
 @app.post("/api/voice/transcribe", response_model=TranscriptCreateOut)
 async def transcribe_voice(
     audio: Annotated[UploadFile, File(...)],
@@ -135,7 +161,11 @@ async def transcribe_voice(
         # Use shared utility from voice_capture
         convert_to_wav(src_tmp_path, wav_tmp_path)
 
-        raw_text, literal_text, meta = transcribe_file(wav_tmp_path)
+        raw_text, literal_text, segments, meta = transcribe_file(wav_tmp_path)
+
+        # Calculate pronunciation score
+        pron = measure_pronunciation(segments, raw_text)
+        meta["pronunciation"] = pron.model_dump()
 
         # Skip storing empty transcriptions
         if not (raw_text or literal_text) or (
@@ -177,6 +207,7 @@ async def transcribe_voice(
         id=row.id,
         raw_text=row.raw_text,
         literal_text=row.literal_text,
+        pronunciation=meta.get("pronunciation"),
     )
 
 
@@ -220,7 +251,11 @@ async def english_teach(payload: TeachIn, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Missing 'chat_key'")
 
     try:
-        out = teach(text=text, mode=mode)
+        out = teach(
+            text=text,
+            mode=mode,
+            pronunciation_risks=payload.pronunciation_risks,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"english-teacher failed: {type(e).__name__}: {e}")
 

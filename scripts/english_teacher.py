@@ -184,15 +184,23 @@ def _build_system_prompt(mode: str) -> str:
     return f"{base}\n\n{mode_block}\n\n{example_section}\n\n{schema}"
 
 
-def _build_user_prompt(text: str) -> str:
-    return dedent(
+def _build_user_prompt(text: str, pronunciation_risks: list[dict] | None = None) -> str:
+    base = dedent(
         f"""
         User said (speech-to-text transcript):
         {text}
-
-        Return strictly valid JSON matching the schema.
         """
     ).strip()
+    
+    # If we have pronunciation risks from the scoring system, include them
+    if pronunciation_risks:
+        risky_words = [r["word"] for r in pronunciation_risks if r.get("risk") in ("medium", "high")]
+        if risky_words:
+            base += f"\n\nWords flagged for pronunciation issues: {', '.join(risky_words)}"
+            base += "\nFocus your pronunciation feedback on these specific words."
+    
+    base += "\n\nReturn strictly valid JSON matching the schema."
+    return base
 
 
 def _make_fallback_teachout(raw: str) -> TeachOut:
@@ -213,7 +221,12 @@ def _make_fallback_teachout(raw: str) -> TeachOut:
 # Public API (importable)
 # -----------------------------------------------------------------------------
 
-def teach(text: str, mode: str = DEFAULT_MODE, cfg: Optional[TeachCfg] = None) -> TeachOut:
+def teach(
+    text: str,
+    mode: str = DEFAULT_MODE,
+    cfg: Optional[TeachCfg] = None,
+    pronunciation_risks: list[dict] | None = None,
+) -> TeachOut:
     """
     Core function for FastAPI and CLI usage.
 
@@ -221,6 +234,7 @@ def teach(text: str, mode: str = DEFAULT_MODE, cfg: Optional[TeachCfg] = None) -
         text: user utterance(s). You will likely pass combined transcripts.
         mode: coach|strict|correct
         cfg: optional configuration overrides (model/ctx/timeout/temperature/top_p).
+        pronunciation_risks: optional list of word dicts with 'word' and 'risk' keys.
     """
     if cfg is None:
         cfg = TeachCfg(mode=mode)
@@ -229,7 +243,7 @@ def teach(text: str, mode: str = DEFAULT_MODE, cfg: Optional[TeachCfg] = None) -
         mode = "coach"
 
     system_prompt = _build_system_prompt(mode)
-    user_prompt = _build_user_prompt(text)
+    user_prompt = _build_user_prompt(text, pronunciation_risks)
 
     raw = ollama_chat(
         system_prompt=system_prompt,

@@ -31,7 +31,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 
 from .helper.colors import Colors
 
@@ -124,20 +124,51 @@ def transcribe_file(
 
     m = _get_model(model_name, device=device, compute_type=compute_type)
 
+    # Prompt to guide Whisper: write numbers as words, preserve learner errors
+    initial_prompt = (
+        "The following is spoken English from a language learner. "
+        "Write numbers as words (Zero one two three four five six seven eight nine ten hundreds thousands.). "
+    )
+
     segments, info = m.transcribe(
         audio_path,
         language=lang,
-        vad_filter=True,     # removes long silences (does not rewrite text)
-        beam_size=1,         # fast; raise for accuracy if you want
+        vad_filter=True,
+        beam_size=3,
         best_of=1,
         temperature=0.0,
+        word_timestamps=True,
+        initial_prompt=initial_prompt,
+        condition_on_previous_text=False,  # Don't auto-correct based on context
+        suppress_blank=False,  # Preserve hesitations
     )
 
     raw_parts: list[str] = []
+    # Collect detailed segments (with words if available)
+    detailed_segments: list[Dict[str, Any]] = []
+
     for s in segments:
-        t = (s.text or "").strip()
-        if t:
-            raw_parts.append(t)
+        text = (s.text or "").strip()
+        if text:
+            raw_parts.append(text)
+            
+        seg_data = {
+            "start": s.start,
+            "end": s.end,
+            "text": text,
+            "words": [],
+        }
+        if s.words:
+            seg_data["words"] = [
+                {
+                    "word": w.word,
+                    "start": w.start,
+                    "end": w.end,
+                    "probability": w.probability
+                }
+                for w in s.words
+            ]
+        detailed_segments.append(seg_data)
 
     raw_text = " ".join(raw_parts).strip()
     literal_text = literalize(raw_text)
@@ -151,7 +182,7 @@ def transcribe_file(
         "compute_type": compute_type,
     }
 
-    return raw_text, literal_text, meta
+    return raw_text, literal_text, detailed_segments, meta
 
 
 def record_wav(seconds: int, out_path: Path) -> None:
@@ -167,7 +198,7 @@ def record_wav(seconds: int, out_path: Path) -> None:
     subprocess.run(cmd, check=True)
 
 
-def parse_args() -> Args:
+def parse_args(argv: Optional[List[str]] = None) -> Args:
     parser = argparse.ArgumentParser(
         description="Local speech-to-text using faster-whisper",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -192,7 +223,7 @@ def parse_args() -> Args:
     # File mode arguments (applied to main parser)
     parser.add_argument("file_path", nargs="?", help="Path to audio file (for file mode)")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.command == "record":
         return Args(
@@ -247,7 +278,7 @@ def main() -> None:
                 sys.exit(1)
             audio_path = str(audio)
 
-        raw_text, literal_text, meta = transcribe_file(
+        raw_text, literal_text, segments, meta = transcribe_file(
             audio_path,
             model_name=args.model,
             lang=args.lang,
@@ -273,6 +304,7 @@ def main() -> None:
                 "duration": meta.get("duration"),
                 "raw_text": raw_text,
                 "literal_text": literal_text,
+                "segments": segments, 
             },
             ensure_ascii=False,
             indent=2,

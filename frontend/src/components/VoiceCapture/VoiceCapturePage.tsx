@@ -42,8 +42,12 @@ export function VoiceCapturePage() {
         />
 
         <LatestTranscriptCard
+          key={vc.latest?.id}
           latest={vc.latest}
+          audioBlob={vc.lastAudioBlob}
           onRetry={(text) => teacher.onTranscript(text)}
+          pauseListening={vc.pauseListening}
+          resumeListening={vc.resumeListening}
         />
 
         <CaptureCard
